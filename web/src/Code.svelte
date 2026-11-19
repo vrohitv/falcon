@@ -1,39 +1,20 @@
 <script lang="ts">
-  // The code view of one folder: the sidebar (Explorer or Search), open tabs, and the viewer or editor.
-  import { onMount, untrack } from "svelte";
-  import { cachedDirectory, observe, outline as cachedOutline, prefetch, rememberDirectory } from "./filecache";
+  // The code view of one folder: the sidebar (Explorer or Search) and the editors, which can be split
+  // as in VS Code: columns side by side, each holding groups one above another, every group with its
+  // own tabs. Ctrl+\ splits right and Ctrl+Shift+\ down; tabs drag between groups or onto a group's edge;
+  // Ctrl+1 … Ctrl+4 focus a group. The layout is remembered per folder.
+  import { onMount, tick, untrack } from "svelte";
+  import { cachedDirectory, observe, prefetch, rememberDirectory } from "./filecache";
   import { api, apiURL } from "./api";
   import type { FileEntry } from "./api";
-  import CodeViewer, { type ViewState } from "./CodeViewer.svelte";
-  import Editor from "./Editor.svelte";
+  import type { ViewState } from "./CodeViewer.svelte";
+  import EditorGroup, { type GroupState, type DropTarget } from "./EditorGroup.svelte";
   import FileTree from "./FileTree.svelte";
-  import FileIcon from "./FileIcon.svelte";
   import SearchPanel from "./SearchPanel.svelte";
-  import MarkdownView from "./MarkdownView.svelte";
-  import MediaView from "./MediaView.svelte";
-  import { kindOf } from "./file-kind";
   import type { TreeFile } from "./file-tree";
-  import { definitions, isExternal, lspStateFor, lspStatus, lspUsable } from "./definition";
-  import { confirmDiscard } from "./confirm.svelte";
-  import { fade, fly, slide } from "./motion";
-  import { flip } from "svelte/animate";
-  import {
-    FileCode2,
-    Search,
-    FolderOpen,
-    ChevronRight,
-    GitCompare,
-    PanelRightClose,
-    RefreshCw,
-    ListTree,
-    X,
-    Pencil,
-    FilePlus,
-    ArrowLeft,
-    ArrowRight,
-    Eye,
-    Code2,
-  } from "@lucide/svelte";
+  import { isExternal } from "./definition";
+  import { fade, slide } from "./motion";
+  import { Search, FolderOpen, RefreshCw, FilePlus } from "@lucide/svelte";
   let {
     repoID,
     repoName,
@@ -59,40 +40,167 @@
     pulse?: number;
   } = $props();
 
-  const tabsKey = $derived("falcon.tabs:" + repoID);
-  function restore(): { tabs: string[]; selected: string } {
+  // The layout: columns side by side, each with groups one above another. Sizes are shares of the space.
+  type Group = { id: string; size: number; state: GroupState };
+  type Column = { id: string; size: number; groups: Group[] };
+  const uid = () => Math.random().toString(36).slice(2, 9);
+  const layoutKey = $derived("falcon.layout:" + repoID);
+  function restoreLayout(): { columns: Column[]; active: string } {
+    const id = untrack(() => repoID);
+    const clean = (s: GroupState): GroupState => ({
+      tabs: (s.tabs || []).filter((t) => typeof t === "string" && !isExternal(t)),
+      selected: isExternal(s.selected || "") ? "" : s.selected || "",
+    });
     try {
-      const v = JSON.parse(localStorage.getItem("falcon.tabs:" + untrack(() => repoID)) || "null");
-      if (v && Array.isArray(v.tabs)) return v;
+      const v = JSON.parse(localStorage.getItem("falcon.layout:" + id) || "null");
+      if (v && Array.isArray(v.columns) && v.columns.length) {
+        const columns: Column[] = v.columns.map((c: any) => ({
+          id: uid(),
+          size: Number(c.size) || 1,
+          groups: (c.groups || []).map((g: any) => ({ id: uid(), size: Number(g.size) || 1, state: clean(g.state || g) })),
+        }));
+        const flat = columns.flatMap((c) => c.groups);
+        if (flat.length) return { columns: columns.filter((c) => c.groups.length), active: flat[Math.min(flat.length - 1, Number(v.active) || 0)].id };
+      }
+      // The tabs of an older Falcon (one group).
+      const old = JSON.parse(localStorage.getItem("falcon.tabs:" + id) || "null");
+      if (old && Array.isArray(old.tabs)) {
+        const g = { id: uid(), size: 1, state: clean(old) };
+        return { columns: [{ id: uid(), size: 1, groups: [g] }], active: g.id };
+      }
     } catch {}
-    return { tabs: [], selected: "" };
+    const g = { id: uid(), size: 1, state: { tabs: [], selected: "" } };
+    return { columns: [{ id: uid(), size: 1, groups: [g] }], active: g.id };
   }
-  const last = restore();
-  let selected = $state(last.selected),
-    tabs = $state<string[]>(last.tabs),
-    mode = $state<"source" | "diff" | "results">("source"),
-    outline = $state<any[]>([]),
-    showOutline = $state(false),
-    results = $state<{ path: string; line: number; content: string; kind?: string; column?: number; end?: number }[]>([]),
-    resultsTitle = $state(""),
-    diff = $state<any[]>([]),
-    line = $state(1),
-    version = $state(0),
-    loading = $state(false),
-    query = $state("");
-  let cursor = { line: 0, character: 0, hash: "" };
+  const start = restoreLayout();
+  let columns = $state<Column[]>(start.columns),
+    activeId = $state(start.active);
+  const refs: Record<string, ReturnType<typeof EditorGroup>> = $state({});
+  const groups = $derived(columns.flatMap((c) => c.groups));
+  const dirtyGroups = $state<Record<string, boolean>>({});
+  $effect(() => ondirty?.(Object.values(dirtyGroups).some(Boolean)));
+  $effect(() => {
+    try {
+      localStorage.setItem(
+        layoutKey,
+        JSON.stringify({
+          columns: columns.map((c) => ({ size: c.size, groups: c.groups.map((g) => ({ size: g.size, state: g.state })) })),
+          active: Math.max(0, groups.findIndex((g) => g.id === activeId)),
+        }),
+      );
+    } catch {}
+  });
+  const active = () => refs[activeId];
+  function where(id: string): [number, number] {
+    for (let c = 0; c < columns.length; c++) {
+      const g = columns[c].groups.findIndex((x) => x.id === id);
+      if (g >= 0) return [c, g];
+    }
+    return [-1, -1];
+  }
 
-  // Open tabs are watched by the server's OS file watcher; changes arrive as server-sent events. Where
-  // watching is unavailable, the hash is checked on focus and tab switch.
+  /** Splits a group: a new group to its right (or below), showing a file and where it was. */
+  async function split(fromId: string, direction: "right" | "down" | "left" | "up", path = "", view: ViewState | null = null) {
+    const [c, g] = where(fromId);
+    if (c < 0) return "";
+    const fresh: Group = { id: uid(), size: 1, state: { tabs: [], selected: "" } };
+    if (direction === "right" || direction === "left") {
+      const col = columns[c];
+      const half = col.size / 2;
+      col.size = half;
+      const added: Column = { id: uid(), size: half, groups: [fresh] };
+      columns.splice(direction === "right" ? c + 1 : c, 0, added);
+    } else {
+      const col = columns[c];
+      const half = col.groups[g].size / 2;
+      col.groups[g].size = half;
+      fresh.size = half;
+      col.groups.splice(direction === "down" ? g + 1 : g, 0, fresh);
+    }
+    columns = [...columns];
+    activeId = fresh.id;
+    await tick();
+    if (path) refs[fresh.id]?.addTab(path, 0, view);
+    return fresh.id;
+  }
+  function removeGroup(id: string) {
+    if (groups.length < 2) return;
+    const [c, g] = where(id);
+    if (c < 0) return;
+    const col = columns[c];
+    const gone = col.groups[g];
+    col.groups.splice(g, 1);
+    // Its space goes to its neighbour.
+    if (col.groups.length) col.groups[Math.max(0, g - 1)].size += gone.size;
+    else {
+      columns.splice(c, 1);
+      if (columns.length) columns[Math.max(0, c - 1)].size += col.size;
+    }
+    columns = [...columns];
+    delete refs[id];
+    delete dirtyGroups[id];
+    if (activeId === id) activeId = columns[Math.max(0, Math.min(c, columns.length - 1))].groups[0].id;
+  }
+  function moveTab(fromId: string, path: string, toId: string, index = Infinity) {
+    if (fromId === toId) return refs[toId]?.reorder(path, index);
+    const view = refs[fromId]?.takeTab(path) ?? null;
+    refs[toId]?.addTab(path, index, view);
+    activeId = toId;
+  }
+  async function dropSplit(fromId: string, path: string, toId: string, place: DropTarget) {
+    if (place === "center") return moveTab(fromId, path, toId);
+    // A group's only tab dropped on its own edge stays where it is.
+    const from = groups.find((g) => g.id === fromId);
+    if (fromId === toId && from && from.state.tabs.length < 2) return;
+    const direction = place === "left" ? "left" : place === "right" ? "right" : place === "up" ? "up" : "down";
+    const fresh = await split(toId, direction);
+    if (!fresh) return;
+    const view = refs[fromId]?.takeTab(path) ?? null;
+    await tick();
+    refs[fresh]?.addTab(path, 0, view);
+  }
+
+  // Dragging the line between columns, or between groups in a column, resizes them.
+  function resize(e: PointerEvent, axis: "x" | "y", a: { size: number }, b: { size: number }) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    const container = handle.parentElement!;
+    const total = axis === "x" ? container.clientWidth : container.clientHeight;
+    const shares = a.size + b.size;
+    const startPos = axis === "x" ? e.clientX : e.clientY;
+    const startA = a.size;
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add("resizing");
+    const sum = (axis === "x" ? columns : columns.find((c) => c.groups.includes(a as Group))!.groups).reduce((n, x) => n + x.size, 0);
+    const move = (ev: PointerEvent) => {
+      const delta = (((axis === "x" ? ev.clientX : ev.clientY) - startPos) / total) * sum;
+      const next = Math.min(shares - 0.08 * sum, Math.max(0.08 * sum, startA + delta));
+      a.size = next;
+      b.size = shares - next;
+      columns = [...columns];
+    };
+    const end = () => {
+      document.body.classList.remove("resizing");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+  }
+
+  // Open files are watched by the server's OS file watcher (every group's tabs); changes arrive as
+  // server-sent events. Where watching is unavailable, the hash is checked on focus and tab switch.
   let disk = $state<{ path: string; hash: string; exists: boolean; n: number } | null>(null),
     watching = $state(true),
     events = 0;
+  const openPaths = $derived([...new Set(groups.flatMap((g) => g.state.tabs))]);
   function deliver(e: { path: string; hash: string; exists: boolean }) {
     observe(e.path, e.hash, e.exists);
     disk = { ...e, n: ++events };
   }
   $effect(() => {
-    const open = [...tabs];
+    const open = openPaths;
     if (!open.length || !watching) return;
     let opened = false;
     const source = new EventSource(apiURL("/api/files/watch?" + open.map((p) => "path=" + encodeURIComponent(p)).join("&")));
@@ -108,14 +216,17 @@
     };
     return () => source.close();
   });
-  async function check(path = selected) {
+  async function check(path: string) {
     if (watching || !path) return;
     try {
       deliver(await api("/api/file/stat?path=" + encodeURIComponent(path)));
     } catch {}
   }
   $effect(() => {
-    const visible = () => document.visibilityState === "visible" && void check();
+    const visible = () => {
+      if (document.visibilityState !== "visible") return;
+      for (const g of groups) void check(g.state.selected);
+    };
     window.addEventListener("focus", visible);
     document.addEventListener("visibilitychange", visible);
     return () => {
@@ -124,10 +235,9 @@
     };
   });
 
-  let editing = $state(false),
-    dirty = $state(false),
-    creating = $state(false),
-    newPath = $state("");
+  let creating = $state(false),
+    newPath = $state(""),
+    query = $state("");
   // A new file is written empty with an empty expected hash, so an existing file is never replaced.
   async function createFile(e: SubmitEvent) {
     e.preventDefault();
@@ -138,23 +248,11 @@
       creating = false;
       directories = new Map();
       await load();
-      const parts = path.split("/");
-      for (let i = 1; i < parts.length; i++) await loadDirectory(parts.slice(0, i).join("/"));
-      open(path);
-      editing = true;
+      await reveal(path);
+      active()?.openFile(path);
     } catch (err) {
       onerror((err as Error).message.includes("changed since") ? path + " already exists" : (err as Error).message);
     }
-  }
-  // Leaving a file with unsaved edits asks first.
-  function leave(then: () => void) {
-    const go = () => {
-      editing = false;
-      dirty = false;
-      then();
-    };
-    if (!(editing && dirty)) return go();
-    void confirmDiscard(selected).then((ok) => ok && go());
   }
 
   // The explorer: folders load as they are opened; typing filters every file (one listing, fetched once).
@@ -248,76 +346,30 @@
     searchFiles = null;
     try {
       await loadDirectory("");
-      const revealPath = initialPath || selected;
-      if (revealPath) await reveal(revealPath, revealPath === initialPath ? initialLine : 1);
+      const first = groups.find((g) => g.id === activeId)?.state.selected;
+      if (initialPath) {
+        await reveal(initialPath);
+        await tick();
+        active()?.openFile(initialPath, initialLine);
+      } else if (first) await reveal(first);
     } catch (e) {
       onerror((e as Error).message);
     }
   }
-  async function reveal(path: string, at = 1, sel: { col: number; len: number } | null = null) {
-    const parts = isExternal(path) ? [] : path.split("/");
+  /** Opens the explorer's folders down to a file (or a folder, given with a trailing slash). */
+  async function reveal(path: string) {
+    if (isExternal(path)) return;
+    const parts = path.split("/");
     for (let i = 1; i < parts.length; i++) await loadDirectory(parts.slice(0, i).join("/")).catch(() => {});
-    open(path, at, sel);
   }
-  /** Ctrl+F: find in the open file (the viewer's own find; the editor keeps the browser's). */
+  /** Ctrl+F: find in the focused group's file. */
   export function find(): boolean {
-    if (editing || mode !== "source" || !viewer) return false;
-    return viewer.find() ?? false;
+    return active()?.find() ?? false;
   }
-  /** Open a file (from the switcher, quick open or search), at a line, selecting a match there if given. */
+  /** Opens a file in the focused group (from the switcher, quick open or search). */
   export function openFile(path: string, at = 1, col?: number, len?: number) {
-    void reveal(path, at, col !== undefined && len ? { col, len } : null);
-  }
-  // Each tab remembers where it was left (scroll, caret, selection); showing it again goes back there.
-  const views = new Map<string, ViewState>();
-  let restoreView = $state<ViewState | null>(null),
-    selectAt = $state<{ col: number; len: number } | null>(null);
-
-  let filesOpen = $state(untrack(() => !initialPath && !selected) && matchMedia("(max-width: 760px)").matches);
-  function open(path: string, at = 1, sel: { col: number; len: number } | null = null, fromTab = false) {
-    if (path !== selected) leave(() => openNow(path, at, sel, fromTab));
-    else openNow(path, at, sel, fromTab);
-  }
-  function openNow(path: string, at: number, sel: { col: number; len: number } | null = null, fromTab = false) {
-    filesOpen = false;
-    const showing = viewer && mode === "source" && !editing;
-    if (path === selected && showing) {
-      // The file already on screen: its tab does nothing; a line in it is gone to without reloading.
-      if (!fromTab) {
-        viewer!.revealAt(at, sel);
-        onlocation?.(path, at);
-      }
-      return;
-    }
-    if (selected && showing) views.set(selected, viewer!.viewState());
-    restoreView = fromTab ? (views.get(path) ?? null) : null;
-    selectAt = sel;
-    selected = path;
-    line = at;
-    mode = "source";
-    version++;
-    if (!tabs.includes(path)) tabs = [...tabs, path].slice(-40);
-    onlocation?.(path, at);
-    void check(path);
-    void loadOutline();
-  }
-  async function loadOutline() {
-    if (!selected) return;
-    try {
-      outline = await cachedOutline(selected);
-    } catch {
-      outline = [];
-    }
-  }
-  async function showDiff() {
-    if (!selected) return;
-    try {
-      const d = await api("/api/git/diff?area=working&path=" + encodeURIComponent(selected));
-      diff = d.hunks || [];
-      mode = "diff";
-    } catch (e) {
-      onerror((e as Error).message);
-    }
+    void reveal(path);
+    active()?.openFile(path, at, col, len);
   }
 
   // The explorer's width: drag its edge or use the arrow keys on it; double-click resets.
@@ -363,174 +415,35 @@
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
   }
-  function closeTab(tab: string) {
-    if (selected === tab) leave(() => removeTab(tab));
-    else removeTab(tab);
-  }
-  function removeTab(tab: string) {
-    const i = tabs.indexOf(tab);
-    tabs = tabs.filter((x) => x !== tab);
-    views.delete(tab);
-    if (selected === tab) {
-      if (tabs.length) open(tabs[Math.min(i, tabs.length - 1)], 1, null, true);
-      else {
-        selected = "";
-        onlocation?.("", 0);
-      }
-    }
-  }
 
-  // Tabs: two files with the same name show their folder too; the active tab is always scrolled into view;
-  // the wheel scrolls the strip sideways.
-  let strip = $state<HTMLDivElement>();
-  const tabNames = $derived.by(() => {
-    const count = new Map<string, number>();
-    for (const t of tabs) count.set(t.split("/").at(-1)!, (count.get(t.split("/").at(-1)!) || 0) + 1);
-    return new Map(
-      tabs.map((t) => {
-        const parts = t.split("/");
-        const name = parts.at(-1)!;
-        return [t, { name, dir: count.get(name)! > 1 && parts.length > 1 ? parts.slice(-2, -1)[0] : "" }];
-      }),
-    );
-  });
-  $effect(() => {
-    void selected;
-    void tabs.length;
-    requestAnimationFrame(() => strip?.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" }));
-  });
-  function stripWheel(e: WheelEvent) {
-    if (!strip || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-    strip.scrollLeft += e.deltaY;
-    e.preventDefault();
-  }
-
-  // Navigation history: a definition, a reference or a search result leaves the place it was made from
-  // behind; Back returns there exactly (scroll, caret, selection) and Forward comes back: Alt+← and Alt+→,
-  // or the mouse's back and forward buttons.
-  type Place = { path: string; line: number; view: ViewState | null };
-  let viewer = $state<ReturnType<typeof CodeViewer>>(),
-    trail = $state<Place[]>([]),
-    ahead = $state<Place[]>([]);
-  const here = (): Place | null =>
-    selected ? { path: selected, line: cursor.line + 1, view: viewer && mode === "source" && !editing ? viewer.viewState() : null } : null;
-  /** Goes to a place (line -1: stay, only remember where this was). */
-  function jump(path: string, at: number, column?: number, end?: number) {
-    const from = here();
-    if (from) trail = [...trail.slice(-99), from];
-    ahead = [];
-    if (at < 0) return;
-    open(path, at, column != null ? { col: column, len: Math.max(0, (end ?? column) - column) } : null);
-  }
-  function visit(p: Place) {
-    if (p.path === selected && viewer && p.view && mode === "source" && !editing) return viewer.restoreView(p.view);
-    if (p.view) views.set(p.path, p.view);
-    open(p.path, p.line, null, !!p.view);
-  }
-  function back() {
-    const prev = trail.at(-1);
-    const from = here();
-    if (!prev) return;
-    trail = trail.slice(0, -1);
-    if (from) ahead = [...ahead, from];
-    visit(prev);
-  }
-  function forward() {
-    const next = ahead.at(-1);
-    const from = here();
-    if (!next) return;
-    ahead = ahead.slice(0, -1);
-    if (from) trail = [...trail, from];
-    visit(next);
-  }
-  const backKeys = "Alt+←",
-    forwardKeys = "Alt+→";
-  // References: the language server when there is one; otherwise every whole-word match.
-  async function references() {
-    const name = viewer?.wordAtCaret();
-    if (!selected || !name) return onerror("Place the caret on a name first");
-    loading = true;
-    try {
-      const semantic = lspUsable(lspStateFor(selected, await lspStatus()).state);
-      const found = semantic
-        ? await definitions({ path: selected, name, line: cursor.line, character: cursor.character, hash: cursor.hash, semantic, method: "textDocument/references" })
-        : { targets: [] };
-      if (found.targets.length) {
-        results = found.targets.map((t) => ({ path: t.path, line: t.line, column: t.column, end: t.end, content: t.text || t.signature || "" }));
-        resultsTitle = `References to ${name}`;
-      } else {
-        const hits = await api<{ path: string; line: number; content: string }[]>("/api/search?word=true&case=true&q=" + encodeURIComponent(name));
-        // git grep's columns are bytes; the name's place on the line, in characters, selects it.
-        results = hits.map((h) => {
-          const at = h.content.search(new RegExp(`(?<![\\w$])${name.replace(/[$]/g, "\\$")}(?![\\w$])`));
-          return { path: h.path, line: h.line, content: h.content, column: at >= 0 ? at : undefined, end: at >= 0 ? at + name.length : undefined };
-        });
-        resultsTitle = `${name} · whole-word matches`;
-      }
-      mode = "results";
-    } catch (e) {
-      onerror((e as Error).message);
-    } finally {
-      loading = false;
-    }
-  }
-
-  $effect(() => {
-    try {
-      // Files outside the folder are reached through a definition; they are not reopened later.
-      localStorage.setItem(tabsKey, JSON.stringify({ tabs: tabs.filter((t) => !isExternal(t)), selected: isExternal(selected) ? "" : selected }));
-    } catch {}
-  });
-  $effect(() => ondirty?.(editing && dirty));
+  let filesOpen = $state(untrack(() => !initialPath) && matchMedia("(max-width: 760px)").matches);
+  const selectedHere = $derived(groups.find((g) => g.id === activeId)?.state.selected || "");
   onMount(() => {
     void load();
     return () => {
       alive = false;
     };
   });
-  const external = $derived(isExternal(selected));
-  // An outside file shows its readable path (~ext/<token>/go/errors/errors.go → go › errors › errors.go).
-  const crumbs = $derived(selected ? (external ? selected.split("/").slice(2) : selected.split("/")) : []);
-  // How the open file is shown: its viewer (Markdown, image, PDF, …), or as text when asked.
-  const shownAs = $derived(selected ? kindOf(selected).viewer : "code");
-  const previewable = $derived(shownAs === "markdown" || shownAs === "svg" || shownAs === "table");
-  const textual = $derived(shownAs === "code" || previewable);
-  let asSource = $state(false);
-  $effect(() => {
-    void selected;
-    asSource = false;
-  });
-  const diskVersion = $derived(disk && disk.path === selected ? disk.n : 0);
 </script>
 
 <svelte:window
-  onmouseup={(e) => {
-    // The mouse's back and forward buttons move through the navigation history (not the browser's).
-    if (e.button === 3 && trail.length) {
-      e.preventDefault();
-      back();
-    } else if (e.button === 4 && ahead.length) {
-      e.preventDefault();
-      forward();
-    }
-  }}
   onkeydown={(e) => {
     if (e.key === "Escape" && filesOpen) filesOpen = false;
-    // Ctrl+S outside the editor would open the browser's "Save page" dialog.
-    if (e.ctrlKey && e.key.toLowerCase() === "s" && !editing) e.preventDefault();
-    const backKey = e.altKey && !e.shiftKey && !e.ctrlKey && e.key === "ArrowLeft";
-    const forwardKey = e.altKey && !e.shiftKey && !e.ctrlKey && e.key === "ArrowRight";
-    if (backKey && trail.length) {
+    // Ctrl+\ splits the focused group to the right, Ctrl+Shift+\ below.
+    if (e.ctrlKey && !e.altKey && (e.key === "\\" || e.code === "Backslash")) {
       e.preventDefault();
-      back();
-    } else if (forwardKey && ahead.length) {
-      e.preventDefault();
-      forward();
+      const cur = active()?.current();
+      void split(activeId, e.shiftKey ? "down" : "right", cur?.path || "", cur?.view ?? null);
+      return;
     }
-    // Edit the open file: E (when not typing), as a quick toggle.
-    if (e.key === "Enter" && e.ctrlKey && e.shiftKey && selected && !editing) {
-      e.preventDefault();
-      editing = true;
+    // Ctrl+1 … Ctrl+4 focus a group.
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && /^[1-4]$/.test(e.key)) {
+      const g = groups[Number(e.key) - 1];
+      if (g) {
+        e.preventDefault();
+        activeId = g.id;
+        (document.querySelector(`[data-group="${g.id}"] .code-viewport`) as HTMLElement | null)?.focus();
+      }
     }
   }}
 />
@@ -546,7 +459,7 @@
               title="New file"
               onclick={() => {
                 creating = !creating;
-                newPath = selected ? selected.slice(0, selected.lastIndexOf("/") + 1) : "";
+                newPath = selectedHere ? selectedHere.slice(0, selectedHere.lastIndexOf("/") + 1) : "";
               }}><FilePlus size={13} /></button
             ><button class="icon-button" aria-label="Refresh files" title="Refresh" onclick={load}><RefreshCw size={13} /></button></span
           >
@@ -566,12 +479,15 @@
         <div class="tree-root"><FolderOpen size={14} />{repoName}{#if treeBusy}<span>Listing…</span>{/if}</div>
         <FileTree
           {files}
-          {selected}
+          selected={selectedHere}
           label="Explorer files"
           filter={query}
           storageKey={"falcon.tree.explorer:" + repoID}
           fill
-          onopen={(path) => open(path)}
+          onopen={(path) => {
+            filesOpen = false;
+            active()?.openFile(path);
+          }}
           onexpand={loadDirectory}
           onpeek={prefetch}
         />{/if}
@@ -596,149 +512,39 @@
         }}
       ></div>
     </aside>{/if}
-  <div class="source-panel">
-    <div class="source-tabs">
-      <button class="icon-button files-toggle" aria-label="Browse files" aria-expanded={filesOpen} onclick={() => (filesOpen = !filesOpen)}
-        ><FolderOpen size={17} /></button
-      >
-      <div class="tab-strip" bind:this={strip} onwheel={stripWheel} role="tablist" aria-label="Open files">
-        {#each tabs as tab (tab)}{@const label = tabNames.get(tab)}<div class="tab" class:active={selected === tab} animate:flip={{ duration: 160 }} in:fly={{ y: -4, duration: 140 }}>
-            <button
-              role="tab"
-              aria-selected={selected === tab}
-              title={tab}
-              onclick={() => {
-                if (tab === selected) return;
-                open(tab, 1, null, true);
-                void check(tab);
-              }}
-              onauxclick={(e) => e.button === 1 && closeTab(tab)}
-              ><FileIcon path={tab} size={14} /><span class="tab-name">{label?.name}</span>{#if label?.dir}<span class="tab-dir">{label.dir}</span>{/if}</button
-            >{#if editing && dirty && selected === tab}<i class="tab-dirty" title="Unsaved changes"></i>{/if}<button class="tab-close" aria-label={`Close ${tab}`} title="Close (middle-click)" onclick={() => closeTab(tab)}><X size={12} /></button>
-          </div>{/each}
+  <div class="editor-grid">
+    {#each columns as col, ci (col.id)}
+      {#if ci > 0}<!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="grid-sash vertical" title="Drag to resize" onpointerdown={(e) => resize(e, "x", columns[ci - 1], col)}></div>{/if}
+      <div class="editor-column" style:flex-grow={col.size}>
+        {#each col.groups as g, gi (g.id)}
+          {#if gi > 0}<!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="grid-sash horizontal" title="Drag to resize" onpointerdown={(e) => resize(e, "y", col.groups[gi - 1], g)}></div>{/if}
+          <div class="editor-cell" data-group={g.id} style:flex-grow={g.size}>
+            <EditorGroup
+              bind:this={refs[g.id]}
+              id={g.id}
+              {repoName}
+              active={g.id === activeId}
+              alone={groups.length === 1}
+              initial={g.state}
+              {disk}
+              {onerror}
+              onlocation={(p, l) => g.id === activeId && onlocation?.(p, l)}
+              onfocus={() => (activeId = g.id)}
+              onstate={(s) => (g.state = s)}
+              ondirty={(d) => (dirtyGroups[g.id] = d)}
+              oncheck={check}
+              onreveal={(p) => void reveal(p)}
+              onsplit={(dir, p, view) => void split(g.id, dir, p, view)}
+              ondroptab={(from, p, index) => moveTab(from, p, g.id, index)}
+              ondropsplit={(from, p, place) => void dropSplit(from, p, g.id, place)}
+              onempty={() => removeGroup(g.id)}
+              onbrowse={() => (filesOpen = !filesOpen)}
+            />
+          </div>
+        {/each}
       </div>
-      <div class="source-actions">
-        {#if selected && previewable}<span class="view-toggle" role="group" aria-label="Show as"
-            ><button class:on={!asSource && !editing} aria-pressed={!asSource} title="Preview" onclick={() => ((asSource = false), (mode = "source"))}><Eye size={14} />Preview</button
-            ><button class:on={asSource || editing} aria-pressed={asSource} title="Source" onclick={() => ((asSource = true), (mode = "source"))}><Code2 size={14} />Source</button
-            ></span
-          >{/if}
-        {#if selected && textual && !external}<button
-            class="icon-button"
-            class:on={editing}
-            title={editing ? "Editing" : "Edit file (Ctrl+Shift+Enter)"}
-            aria-label="Edit file"
-            onclick={() => {
-              if (!editing) {
-                mode = "source";
-                editing = true;
-                void check();
-              }
-            }}><Pencil size={15} /></button
-          ><button class="icon-button" class:on={mode === "diff"} title="Changes to this file" aria-label="File changes" onclick={() => (mode === "diff" ? (mode = "source") : showDiff())}
-            ><GitCompare size={15} /></button
-          ><button class="icon-button" class:on={showOutline} title="Outline" aria-label="Outline" onclick={() => (showOutline = !showOutline)}
-            ><ListTree size={15} /></button
-          >{/if}
-      </div>
-    </div>
-    {#if selected}<div class="breadcrumbs">
-        {#if trail.length || ahead.length}<button class="crumb-back" title={`Back (${backKeys})`} aria-label="Back" disabled={!trail.length} onclick={back}><ArrowLeft size={12} /></button
-          ><button class="crumb-back" title={`Forward (${forwardKeys})`} aria-label="Forward" disabled={!ahead.length} onclick={forward}><ArrowRight size={12} /></button
-          >{/if}{#if external}<span class="crumb-external" title="A file outside this folder, reached through a definition. Read-only.">Outside the folder</span
-          >{:else}<span class="crumb-root">{repoName}</span
-          >{/if}{#each crumbs as segment, i}<ChevronRight size={11} />{#if i < crumbs.length - 1 && !external}<button
-              class="crumb"
-              title="Show in the explorer"
-              onclick={() => void loadDirectory(crumbs.slice(0, i + 1).join("/"))}>{segment}</button
-            >{:else}<span>{segment}</span>{/if}{/each}<span class="crumb-gap"></span>{#if shownAs === "code" || asSource}<button
-            title="Go to definition of the name at the caret (F12, or Ctrl+click)"
-            onclick={() => viewer?.definitionAtCaret()}
-            disabled={loading || editing}>Definition</button
-          ><button title="Find references to the name at the caret (Shift+F12)" onclick={references} disabled={loading || editing}>References</button>{/if}
-      </div>{/if}
-    <div class="source-body">
-      {#if mode === "results"}<div class="search-results" in:fade={{ duration: 120 }}>
-          <div class="panel-heading">
-            <h3>{resultsTitle}</h3>
-            <span>{results.length} {results.length === 1 ? "place" : "places"}</span><button class="button small-button" onclick={() => (mode = "source")}>Back to source</button>
-          </div>
-          {#each results as hit}<button class="search-hit" onclick={() => jump(hit.path, hit.line, hit.column, hit.end)}
-              ><strong>{hit.path.replace(/^~ext\/[^/]+\//, "")}<span>:{hit.line}</span></strong>{#if hit.content}<pre>{hit.content.trim()}</pre>{/if}</button
-            >{/each}{#if !results.length}<div class="empty-state">
-              <Search size={28} />
-              <h3>Nothing found</h3>
-            </div>{/if}
-        </div>
-      {:else if mode === "diff"}<div class="diff-view" in:fade={{ duration: 120 }}>
-          <div class="panel-heading">
-            <h3>Changes to {selected.split("/").at(-1)}</h3>
-            <button class="button small-button" onclick={() => (mode = "source")}>Back to source</button>
-          </div>
-          {#if !diff.length}<div class="empty-state">
-              <GitCompare size={28} />
-              <h3>No unstaged changes</h3>
-              <p>This file matches what is staged (or committed).</p>
-            </div>{/if}{#each diff as hunk}<div class="hunk-label">@@ -{hunk.oldStart} +{hunk.newStart} @@ {hunk.section}</div>
-            {#each hunk.rows as row}<div class="diff-row {row.type}">
-                <span>{row.oldLine || ""}</span><span>{row.newLine || ""}</span><code
-                  >{row.type === "add" ? "+" : row.type === "del" ? "-" : " "}
-                  {#if row.html}{@html row.html}{:else}{row.text}{/if}</code
-                >
-              </div>{/each}{/each}
-        </div>
-      {:else if selected && editing}{#key selected}<Editor
-            path={selected}
-            startLine={line}
-            ondirty={(d) => (dirty = d)}
-            {onerror}
-            ondone={(saved) => {
-              editing = false;
-              dirty = false;
-              if (saved) {
-                version++;
-                void loadOutline();
-              }
-            }}
-            {disk}
-          />{/key}
-      {:else if selected && shownAs === "markdown" && !asSource}{#key selected + version}<MarkdownView path={selected} {disk} onopen={(p, l) => openFile(p, l)} />{/key}
-      {:else if selected && shownAs !== "code" && !(previewable && asSource)}{#key selected}<MediaView path={selected} viewer={shownAs} version={diskVersion} />{/key}
-      {:else if selected}{#key selected + version}<CodeViewer
-            bind:this={viewer}
-            onjump={jump}
-            onreferences={references}
-            onnotice={onerror}
-            {disk}
-            path={selected}
-            startLine={line}
-            startSelect={selectAt}
-            restore={restoreView}
-            onposition={(l, character, hash) => {
-              cursor = { line: l, character, hash };
-              onlocation?.(selected, l + 1);
-            }}
-          />{/key}
-      {:else}<div class="empty-state file-empty" in:fade={{ duration: 200 }}>
-          <div class="empty-glyph"><FileCode2 size={32} /></div>
-          <h2>{repoName}</h2>
-          <p>Open a file from the explorer, or jump straight to one.</p>
-          <button class="button primary mobile-only" onclick={() => (filesOpen = true)}><FolderOpen size={15} /> Browse files</button>
-          <div class="keyboard-hints">
-            <span><kbd>Ctrl</kbd><kbd>P</kbd> Go to file</span>
-            <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>O</kbd> Go to symbol</span>
-            <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F</kbd> Search</span>
-            <span><kbd>Ctrl</kbd><kbd>K</kbd> Switch folder</span>
-          </div>
-        </div>{/if}
-      {#if showOutline && selected}<aside class="outline" transition:slide={{ x: 24 }}>
-          <div class="section-label">
-            Outline<button class="icon-button" aria-label="Close outline" onclick={() => (showOutline = false)}><PanelRightClose size={13} /></button>
-          </div>
-          {#each outline as sym}<button onclick={() => open(selected, sym.line)}
-              ><span class="symbol-kind">{sym.kind.slice(0, 2)}</span>{sym.name}<span>{sym.line}</span></button
-            >{/each}{#if !outline.length}<p class="small muted">No declarations found.</p>{/if}
-        </aside>{/if}
-    </div>
+    {/each}
   </div>
 </div>

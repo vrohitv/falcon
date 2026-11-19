@@ -64,7 +64,7 @@
   export type ViewState = { top: number; left: number; caret: { line: number; col: number }; anchor: { line: number; col: number } | null };
   let updated = $state(0);
   type Position = { line: number; col: number };
-  let viewport: HTMLDivElement;
+  let viewport = $state<HTMLDivElement>(null!);
   let rows: HTMLDivElement;
   let meta = $state<Window | null>(null);
   let error = $state("");
@@ -1415,6 +1415,7 @@
     min-width: 0;
   }
   .code-viewer {
+    container-type: inline-size;
     position: relative;
     height: 100%;
     min-height: 300px;
@@ -1494,6 +1495,20 @@
   }
   .code-foot span:nth-child(2) {
     margin-right: auto;
+  }
+  .code-foot > span:first-child {
+    white-space: nowrap;
+  }
+  .foot-hint {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* A narrow editor group (a split) keeps the line and column on one line and drops the hint. */
+  @container (max-width: 720px) {
+    .foot-hint:not(.foot-problem) {
+      visibility: hidden;
+    }
   }
   .code-foot button {
     padding: 3px;

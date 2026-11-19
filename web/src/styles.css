@@ -838,3 +838,128 @@ body.resizing * {
   opacity: 0.35;
   cursor: default;
 }
+
+/* Split editors: columns side by side, groups one above another, lines between them to drag. */
+.editor-grid {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.editor-column {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.editor-cell {
+  flex: 1 1 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.grid-sash {
+  flex: none;
+  position: relative;
+  z-index: 3;
+  background: var(--line);
+}
+.grid-sash.vertical {
+  width: 1px;
+  cursor: col-resize;
+}
+.grid-sash.horizontal {
+  height: 1px;
+  cursor: row-resize;
+}
+/* A wider, invisible grip around the 1px line; it lights up while hovered or dragged. */
+.grid-sash::after {
+  content: "";
+  position: absolute;
+  transition: background 120ms var(--ease-out) 80ms;
+}
+.grid-sash.vertical::after {
+  inset: 0 -3px;
+}
+.grid-sash.horizontal::after {
+  inset: -3px 0;
+}
+.grid-sash:hover::after,
+.grid-sash:active::after {
+  background: var(--accent);
+}
+/* Only the focused group's active tab carries the accent; the others' are quieter. */
+.source-panel:not(.active-group) .tab.active::before {
+  background: var(--line-strong);
+}
+.source-panel:not(.active-group) .tab.active {
+  color: var(--text);
+}
+/* Where a dragged tab would land: a bar between tabs, or a shaded half (or whole) of a group. */
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+.tab[draggable="true"] {
+  cursor: default;
+}
+.drop-preview {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: inset 120ms var(--ease-out);
+}
+.drop-preview.center {
+  inset: 0;
+}
+.drop-preview.left {
+  inset: 0 50% 0 0;
+}
+.drop-preview.right {
+  inset: 0 0 0 50%;
+}
+.drop-preview.up {
+  inset: 0 0 50% 0;
+}
+.drop-preview.down {
+  inset: 50% 0 0 0;
+}
+/* The tab context menu. */
+.tab-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 210px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+.tab-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+}
+.tab-menu button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.tab-menu button:disabled {
+  color: var(--subtle);
+}
+.tab-menu hr {
+  margin: 4px 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+}

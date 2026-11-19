@@ -16,6 +16,12 @@ falcon ~/code/app ~/code/api      # then open http://127.0.0.1:7700
 
 **Read**
 - Opens any file instantly, however long: the viewer fetches only the lines on screen, highlighted.
+- Split editors as in VS Code: groups side by side and stacked (Ctrl+\\, Ctrl+Shift+\\, or a tab's menu),
+  tabs dragged to reorder, into another group, or onto a group's edge to split it; drag the lines between
+  groups to resize; Ctrl+1 … Ctrl+4 focus a group. The tab menu closes others, those to the right, or all.
+  The layout and every group's tabs come back next time.
+- A small minimap beside the code shows the file's shape (no text, so it costs nothing), the visible
+  region, problems and find matches; click or drag it to scroll.
 - Ctrl+click or F12 goes to a definition, with the name selected there; Shift+F12 lists references
   with their code; Back and Forward retrace your steps (Alt+← / Alt+→, or the mouse's side buttons). Definitions in the standard library or a dependency open
   read-only, and you can keep navigating inside them.
@@ -134,7 +140,7 @@ Falcon runs on Windows and Linux; every shortcut uses Ctrl and Alt.
 | Ctrl+F12 | Implementations |
 | Alt+← / Alt+→ | Back / Forward (or the mouse's side buttons) |
 | F8 | Next problem |
-| Ctrl+\\ | Split the editor to the right (Ctrl+Alt+\\ below) |
+| Ctrl+\\ / Ctrl+Shift+\\ | Split the editor right / down |
 | Ctrl+1 … Ctrl+4 | Focus an editor group |
 | Ctrl+K | Switch folder |
 | Ctrl+Shift+E / Ctrl+B | Explorer / toggle the sidebar |
