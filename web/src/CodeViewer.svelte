@@ -50,7 +50,7 @@
     startLine?: number;
     onposition?: (line: number, character: number, hash: string) => void;
     /** Another file's definition was chosen. */
-    onjump?: (path: string, line: number) => void;
+    onjump?: (path: string, line: number, column?: number, end?: number) => void;
     onnotice?: (message: string) => void;
     disk?: { path: string; hash: string; exists: boolean; n: number } | null;
     /** Find references to the name at the caret (⇧F12, the context menu). */
@@ -494,6 +494,9 @@
     }
     return { line: p.line, col: i };
   }
+  // Word jumps are ⌥←/⌥→ on macOS and Ctrl+←/Ctrl+→ elsewhere (where Alt+← and Alt+→ go Back and Forward).
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const wordKey = (e: KeyboardEvent) => (mac ? e.altKey : e.ctrlKey);
   function lineRange(line: number): [Position, Position] {
     const total = meta?.total || 1;
     return line < total ? [{ line, col: 0 }, { line: line + 1, col: 0 }] : [{ line, col: 0 }, { line, col: (lineText(line) || "").length }];
@@ -866,13 +869,13 @@
       case "ArrowLeft":
         if (selected && !event.shiftKey) next = before(selected.a, selected.f) ? selected.a : selected.f;
         else if (event.metaKey) next = { line: caretPos.line, col: 0 };
-        else if (event.altKey || event.ctrlKey) next = caretPos.col === 0 ? { line: caretPos.line - 1, col: 1e9 } : wordEdge(caretPos, -1);
+        else if (wordKey(event)) next = caretPos.col === 0 ? { line: caretPos.line - 1, col: 1e9 } : wordEdge(caretPos, -1);
         else next = caretPos.col === 0 ? { line: caretPos.line - 1, col: 1e9 } : { line: caretPos.line, col: caretPos.col - 1 };
         break;
       case "ArrowRight":
         if (selected && !event.shiftKey) next = before(selected.a, selected.f) ? selected.f : selected.a;
         else if (event.metaKey) next = { line: caretPos.line, col: text.length };
-        else if (event.altKey || event.ctrlKey) next = caretPos.col >= text.length ? { line: caretPos.line + 1, col: 0 } : wordEdge(caretPos, 1);
+        else if (wordKey(event)) next = caretPos.col >= text.length ? { line: caretPos.line + 1, col: 0 } : wordEdge(caretPos, 1);
         else next = caretPos.col >= text.length ? { line: caretPos.line + 1, col: 0 } : { line: caretPos.line, col: caretPos.col + 1 };
         break;
       case "Home":
@@ -1148,10 +1151,21 @@
     menu = null;
     fn();
   }
+  // A language server's answer has a column: the name itself is selected there.
   function jumpTo(t: Target) {
     picker = null;
-    if (t.path === path) go(t.line);
-    else onjump?.(t.path, t.line);
+    if (t.path !== path) return onjump?.(t.path, t.line, t.column, t.end);
+    onjump?.(path, -1); // remembered for Back, without moving
+    if (t.column != null) selectRange({ line: t.line, col: t.column }, { line: t.line, col: t.end ?? t.column });
+    else go(t.line);
+  }
+  /** Goes back to a remembered place in this file (Back and Forward). */
+  export function restoreView(v: ViewState) {
+    if (!meta) return;
+    viewport.scrollTop = v.top;
+    viewport.scrollLeft = v.left;
+    paint();
+    setCaret(v.caret, v.anchor, false);
   }
   function caretWord() {
     const text = rows.querySelector(`[data-line="${current}"] .code-text`)?.textContent || "";
@@ -1349,7 +1363,7 @@
     }} aria-label={"Definitions of " + picker.name} style:left="{Math.min(picker.x, innerWidth - 440)}px" style:top="{Math.min(picker.y + 14, innerHeight - 260)}px" in:fly={{ y: 4, duration: 120 }}>
       <div class="def-picker-head">{picker.targets.length} {picker.kind === "implementation" ? "implementations" : picker.kind === "type definition" ? "type definitions" : "definitions"} of <b>{picker.name}</b></div>
       {#each picker.targets as t, i}<button role="option" aria-selected="false" onclick={() => jumpTo(t)} use:focusFirst={i === 0}
-          ><code>{t.signature || t.path}</code><span>{t.path}:{t.line}</span></button
+          ><code>{t.signature || t.text?.trim() || t.path}</code><span>{t.external ? "outside the folder: " : ""}{t.path.replace(/^~ext\/[^/]+\//, "")}:{t.line}</span></button
         >{/each}
     </div>{/if}
   <div class="code-foot">

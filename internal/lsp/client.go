@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ type Client struct {
 	next         atomic.Int64
 	done         chan struct{}
 	home         string
+	root         string
 	closeOnce    sync.Once
 	Capabilities json.RawMessage
 	// Work the server says it is doing ($/progress tokens begun and not ended), and whether it says it is
@@ -56,7 +58,27 @@ type Options struct {
 	InitTimeout time.Duration
 }
 
-func URI(path string) string { return (&url.URL{Scheme: "file", Path: path}).String() }
+// URI is a file path as a file: URI (a Windows path C:\x becomes file:///C:/x).
+func URI(path string) string {
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
+}
+
+// FromURI is the file path of a file: URI ("" for any other).
+func FromURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	p := u.Path
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:] // /C:/x
+	}
+	return filepath.FromSlash(p)
+}
 
 // clientCapabilities are what Falcon's editor can use: navigation, hover in Markdown, hierarchical symbols,
 // diagnostics, and progress reports (so it knows when a server is still indexing).
@@ -109,7 +131,7 @@ func StartWith(ctx context.Context, o Options) (*Client, error) {
 		os.RemoveAll(home)
 		return nil, err
 	}
-	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, progress: map[string]string{}, diagAt: map[string]time.Time{}}
+	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, root: root, progress: map[string]string{}, diagAt: map[string]time.Time{}}
 	go c.read(stdout)
 	timeout := o.InitTimeout
 	if timeout == 0 {
@@ -117,7 +139,7 @@ func StartWith(ctx context.Context, o Options) (*Client, error) {
 	}
 	initCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	params := map[string]any{"processId": os.Getpid(), "rootUri": URI(root), "rootPath": root, "workspaceFolders": []any{map[string]string{"uri": URI(root), "name": "repository"}}, "capabilities": clientCapabilities}
+	params := map[string]any{"processId": os.Getpid(), "rootUri": URI(root), "rootPath": root, "workspaceFolders": []any{map[string]string{"uri": URI(root), "name": filepath.Base(root)}}, "capabilities": clientCapabilities}
 	if o.InitOptions != nil {
 		params["initializationOptions"] = o.InitOptions
 	}
@@ -233,7 +255,7 @@ func (c *Client) read(reader io.Reader) {
 				case "workspace/applyEdit":
 					result = map[string]any{"applied": false, "failureReason": "Edits must pass through the repository broker"}
 				case "workspace/workspaceFolders":
-					result = []any{}
+					result = []any{map[string]string{"uri": URI(c.root), "name": filepath.Base(c.root)}}
 				}
 				_ = c.write(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 			} else {

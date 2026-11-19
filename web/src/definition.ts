@@ -4,7 +4,22 @@ import { lsp, lspStateFor, refreshLsp } from "./lsp.svelte";
 // Go to definition. With a language server available for the file, the
 // answer is semantic; otherwise, or when the server finds nothing, it comes
 // from declaration shapes across the repository (syntax matches).
-export type Target = { path: string; line: number; signature?: string; kind?: string };
+// column/end: characters on the line (from the language server); text: the line, for previews; external:
+// the file's real path when it is outside the folder (path is then an ~ext/ path, opened read-only).
+export type Target = { path: string; line: number; column?: number; end?: number; text?: string; external?: string; signature?: string; kind?: string };
+
+// A file outside the folder (~ext/…) is looked at with the language server of the folder file it was
+// reached from; this remembers which.
+const reachedFrom = new Map<string, string>();
+export const isExternal = (path: string) => path.startsWith("~ext/");
+/** The folder file an outside file was reached from ("" for a file in the folder). */
+export function fromFor(path: string): string {
+  return isExternal(path) ? reachedFrom.get(path) || "" : "";
+}
+function remember(targets: Target[], from: string) {
+  const origin = isExternal(from) ? fromFor(from) : from;
+  for (const t of targets) if (t.external && origin) reachedFrom.set(t.path, origin);
+}
 export type LspMethod =
   | "textDocument/definition"
   | "textDocument/references"
@@ -59,13 +74,17 @@ export async function definitions(q: {
         method: "POST",
         body: JSON.stringify({
           path: q.path,
+          from: fromFor(q.path),
           method: q.method || "textDocument/definition",
           line: q.line,
           character: q.character,
           expected_hash: q.hash,
         }),
       });
-      if (reply.locations?.length) return { targets: reply.locations, semantic: true };
+      if (reply.locations?.length) {
+        remember(reply.locations, q.path);
+        return { targets: reply.locations, semantic: true };
+      }
     } catch {
     } finally {
       lsp.busy = "";
@@ -102,7 +121,7 @@ export async function hoverAt(path: string, line: number, character: number, has
   try {
     const reply = await api<{ hover?: string }>("/api/lsp", {
       method: "POST",
-      body: JSON.stringify({ path, method: "textDocument/hover", line, character, expected_hash: hash }),
+      body: JSON.stringify({ path, from: fromFor(path), method: "textDocument/hover", line, character, expected_hash: hash }),
     });
     return (reply.hover || "").trim();
   } catch {
@@ -125,7 +144,7 @@ export type Problem = {
 export async function problemsFor(path: string): Promise<{ problems: Problem[]; hash: string; indexing: boolean }> {
   const reply = await api<{ diagnostics: Problem[]; hash: string; indexing: boolean }>("/api/lsp/diagnostics", {
     method: "POST",
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, from: fromFor(path) }),
   });
   return { problems: reply.diagnostics || [], hash: reply.hash, indexing: reply.indexing };
 }

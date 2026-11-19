@@ -28,6 +28,7 @@ type Pool struct {
 // Running is one language server in the pool.
 type Running struct {
 	Key     string
+	Root    string
 	Command string
 	Started time.Time
 	client  *Client
@@ -72,7 +73,7 @@ func (p *Pool) Get(ctx context.Context, o Options) (*Running, error) {
 		}
 	}
 	if r == nil {
-		r = &Running{Key: key, Command: o.Command, Started: time.Now(), used: time.Now(), sent: map[string][32]byte{}, ready: make(chan struct{})}
+		r = &Running{Key: key, Root: o.Root, Command: o.Command, Started: time.Now(), used: time.Now(), sent: map[string][32]byte{}, ready: make(chan struct{})}
 		p.servers[key] = r
 		go func() {
 			// The start belongs to the pool, not to the request that happened to cause it.
@@ -116,6 +117,7 @@ func (r *Running) Sync(uri, language, text string) error {
 
 // Status is one server's state, for the editor's pill.
 type Status struct {
+	Root    string    `json:"root"`
 	Command string    `json:"command"`
 	State   string    `json:"state"`
 	Doing   string    `json:"doing,omitempty"`
@@ -129,7 +131,7 @@ func (p *Pool) Statuses() []Status {
 	defer p.mu.Unlock()
 	out := []Status{}
 	for _, r := range p.servers {
-		s := Status{Command: r.Command, Started: r.Started}
+		s := Status{Root: r.Root, Command: r.Command, Started: r.Started}
 		select {
 		case <-r.ready:
 			switch {

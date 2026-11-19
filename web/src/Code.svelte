@@ -13,7 +13,7 @@
   import MediaView from "./MediaView.svelte";
   import { kindOf } from "./file-kind";
   import type { TreeFile } from "./file-tree";
-  import { definitions, lspStateFor, lspStatus, lspUsable } from "./definition";
+  import { definitions, isExternal, lspStateFor, lspStatus, lspUsable } from "./definition";
   import { confirmDiscard } from "./confirm.svelte";
   import { fade, fly, slide } from "./motion";
   import { flip } from "svelte/animate";
@@ -30,6 +30,7 @@
     Pencil,
     FilePlus,
     ArrowLeft,
+    ArrowRight,
     Eye,
     Code2,
   } from "@lucide/svelte";
@@ -72,7 +73,7 @@
     mode = $state<"source" | "diff" | "results">("source"),
     outline = $state<any[]>([]),
     showOutline = $state(false),
-    results = $state<{ path: string; line: number; content: string; kind?: string }[]>([]),
+    results = $state<{ path: string; line: number; content: string; kind?: string; column?: number; end?: number }[]>([]),
     resultsTitle = $state(""),
     diff = $state<any[]>([]),
     line = $state(1),
@@ -254,7 +255,7 @@
     }
   }
   async function reveal(path: string, at = 1, sel: { col: number; len: number } | null = null) {
-    const parts = path.split("/");
+    const parts = isExternal(path) ? [] : path.split("/");
     for (let i = 1; i < parts.length; i++) await loadDirectory(parts.slice(0, i).join("/")).catch(() => {});
     open(path, at, sel);
   }
@@ -404,19 +405,47 @@
     e.preventDefault();
   }
 
-  // Definition jumps leave a trail; Back (Ctrl+-, Alt+←) retraces it.
+  // Navigation history: a definition, a reference or a search result leaves the place it was made from
+  // behind; Back returns there exactly (scroll, caret, selection) and Forward comes back. On macOS ⌃- and
+  // ⌃⇧-, elsewhere Alt+← and Alt+→; the mouse's back and forward buttons too.
+  type Place = { path: string; line: number; view: ViewState | null };
   let viewer = $state<ReturnType<typeof CodeViewer>>(),
-    trail = $state<{ path: string; line: number }[]>([]);
-  function jump(path: string, at: number) {
-    if (selected) trail = [...trail.slice(-49), { path: selected, line: cursor.line + 1 }];
-    open(path, at);
+    trail = $state<Place[]>([]),
+    ahead = $state<Place[]>([]);
+  const here = (): Place | null =>
+    selected ? { path: selected, line: cursor.line + 1, view: viewer && mode === "source" && !editing ? viewer.viewState() : null } : null;
+  /** Goes to a place (line -1: stay, only remember where this was). */
+  function jump(path: string, at: number, column?: number, end?: number) {
+    const from = here();
+    if (from) trail = [...trail.slice(-99), from];
+    ahead = [];
+    if (at < 0) return;
+    open(path, at, column != null ? { col: column, len: Math.max(0, (end ?? column) - column) } : null);
+  }
+  function visit(p: Place) {
+    if (p.path === selected && viewer && p.view && mode === "source" && !editing) return viewer.restoreView(p.view);
+    if (p.view) views.set(p.path, p.view);
+    open(p.path, p.line, null, !!p.view);
   }
   function back() {
     const prev = trail.at(-1);
+    const from = here();
     if (!prev) return;
     trail = trail.slice(0, -1);
-    open(prev.path, prev.line);
+    if (from) ahead = [...ahead, from];
+    visit(prev);
   }
+  function forward() {
+    const next = ahead.at(-1);
+    const from = here();
+    if (!next) return;
+    ahead = ahead.slice(0, -1);
+    if (from) trail = [...trail, from];
+    visit(next);
+  }
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const backKeys = mac ? "⌃-" : "Alt+←",
+    forwardKeys = mac ? "⌃⇧-" : "Alt+→";
   // References: the language server when there is one; otherwise every whole-word match.
   async function references() {
     const name = viewer?.wordAtCaret();
@@ -428,10 +457,15 @@
         ? await definitions({ path: selected, name, line: cursor.line, character: cursor.character, hash: cursor.hash, semantic, method: "textDocument/references" })
         : { targets: [] };
       if (found.targets.length) {
-        results = found.targets.map((t) => ({ path: t.path, line: t.line, content: t.signature || "" }));
+        results = found.targets.map((t) => ({ path: t.path, line: t.line, column: t.column, end: t.end, content: t.text || t.signature || "" }));
         resultsTitle = `References to ${name}`;
       } else {
-        results = await api("/api/search?word=true&case=true&q=" + encodeURIComponent(name));
+        const hits = await api<{ path: string; line: number; content: string }[]>("/api/search?word=true&case=true&q=" + encodeURIComponent(name));
+        // git grep's columns are bytes; the name's place on the line, in characters, selects it.
+        results = hits.map((h) => {
+          const at = h.content.search(new RegExp(`(?<![\\w$])${name.replace(/[$]/g, "\\$")}(?![\\w$])`));
+          return { path: h.path, line: h.line, content: h.content, column: at >= 0 ? at : undefined, end: at >= 0 ? at + name.length : undefined };
+        });
         resultsTitle = `${name} · whole-word matches`;
       }
       mode = "results";
@@ -444,7 +478,8 @@
 
   $effect(() => {
     try {
-      localStorage.setItem(tabsKey, JSON.stringify({ tabs: [...tabs], selected }));
+      // Files outside the folder are reached through a definition; they are not reopened later.
+      localStorage.setItem(tabsKey, JSON.stringify({ tabs: tabs.filter((t) => !isExternal(t)), selected: isExternal(selected) ? "" : selected }));
     } catch {}
   });
   $effect(() => ondirty?.(editing && dirty));
@@ -454,7 +489,9 @@
       alive = false;
     };
   });
-  const crumbs = $derived(selected ? selected.split("/") : []);
+  const external = $derived(isExternal(selected));
+  // An outside file shows its readable path (~ext/<token>/go/errors/errors.go → go › errors › errors.go).
+  const crumbs = $derived(selected ? (external ? selected.split("/").slice(2) : selected.split("/")) : []);
   // How the open file is shown: its viewer (Markdown, image, PDF, …), or as text when asked.
   const shownAs = $derived(selected ? kindOf(selected).viewer : "code");
   const previewable = $derived(shownAs === "markdown" || shownAs === "svg" || shownAs === "table");
@@ -468,15 +505,28 @@
 </script>
 
 <svelte:window
+  onmouseup={(e) => {
+    // The mouse's back and forward buttons move through the navigation history (not the browser's).
+    if (e.button === 3 && trail.length) {
+      e.preventDefault();
+      back();
+    } else if (e.button === 4 && ahead.length) {
+      e.preventDefault();
+      forward();
+    }
+  }}
   onkeydown={(e) => {
     if (e.key === "Escape" && filesOpen) filesOpen = false;
     // ⌘S outside the editor would open the browser's "Save page" dialog.
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && !editing) e.preventDefault();
-    if ((e.ctrlKey && !e.metaKey && e.key === "-") || (e.altKey && e.key === "ArrowLeft")) {
-      if (trail.length) {
-        e.preventDefault();
-        back();
-      }
+    const backKey = mac ? e.ctrlKey && !e.metaKey && !e.shiftKey && e.key === "-" : e.altKey && !e.shiftKey && e.key === "ArrowLeft";
+    const forwardKey = mac ? e.ctrlKey && !e.metaKey && e.shiftKey && (e.key === "_" || e.key === "-") : e.altKey && !e.shiftKey && e.key === "ArrowRight";
+    if (backKey && trail.length) {
+      e.preventDefault();
+      back();
+    } else if (forwardKey && ahead.length) {
+      e.preventDefault();
+      forward();
     }
     // Edit the open file: E (when not typing), as a quick toggle.
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.shiftKey && selected && !editing) {
@@ -574,7 +624,7 @@
             ><button class:on={asSource || editing} aria-pressed={asSource} title="Source" onclick={() => ((asSource = true), (mode = "source"))}><Code2 size={14} />Source</button
             ></span
           >{/if}
-        {#if selected && textual}<button
+        {#if selected && textual && !external}<button
             class="icon-button"
             class:on={editing}
             title={editing ? "Editing" : "Edit file (⌘⇧Enter)"}
@@ -594,8 +644,11 @@
       </div>
     </div>
     {#if selected}<div class="breadcrumbs">
-        {#if trail.length}<button class="crumb-back" title="Back (Ctrl+- or Alt+←)" onclick={back}><ArrowLeft size={12} /></button>{/if}<span class="crumb-root">{repoName}</span
-        >{#each crumbs as segment, i}<ChevronRight size={11} />{#if i < crumbs.length - 1}<button
+        {#if trail.length || ahead.length}<button class="crumb-back" title={`Back (${backKeys})`} aria-label="Back" disabled={!trail.length} onclick={back}><ArrowLeft size={12} /></button
+          ><button class="crumb-back" title={`Forward (${forwardKeys})`} aria-label="Forward" disabled={!ahead.length} onclick={forward}><ArrowRight size={12} /></button
+          >{/if}{#if external}<span class="crumb-external" title="A file outside this folder, reached through a definition. Read-only.">Outside the folder</span
+          >{:else}<span class="crumb-root">{repoName}</span
+          >{/if}{#each crumbs as segment, i}<ChevronRight size={11} />{#if i < crumbs.length - 1 && !external}<button
               class="crumb"
               title="Show in the explorer"
               onclick={() => void loadDirectory(crumbs.slice(0, i + 1).join("/"))}>{segment}</button
@@ -611,8 +664,8 @@
             <h3>{resultsTitle}</h3>
             <span>{results.length} {results.length === 1 ? "place" : "places"}</span><button class="button small-button" onclick={() => (mode = "source")}>Back to source</button>
           </div>
-          {#each results as hit}<button class="search-hit" onclick={() => open(hit.path, hit.line)}
-              ><strong>{hit.path}<span>:{hit.line}</span></strong>{#if hit.content}<pre>{hit.content}</pre>{/if}</button
+          {#each results as hit}<button class="search-hit" onclick={() => jump(hit.path, hit.line, hit.column, hit.end)}
+              ><strong>{hit.path.replace(/^~ext\/[^/]+\//, "")}<span>:{hit.line}</span></strong>{#if hit.content}<pre>{hit.content.trim()}</pre>{/if}</button
             >{/each}{#if !results.length}<div class="empty-state">
               <Search size={28} />
               <h3>Nothing found</h3>

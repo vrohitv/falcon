@@ -91,9 +91,12 @@ test("go to file, a link to the line, and ⌘-click to the definition", async ({
   await page.keyboard.up(mod);
   await expect(page).toHaveURL(/#internal\/greet\/greet\.go:4/);
   await expect(page.locator(".code-row.current")).toContainText("func Hello");
-  // Back returns to where the jump started.
-  await page.keyboard.press("Alt+ArrowLeft");
+  // Back returns to where the jump started; Forward goes there again (⌃- / ⌃⇧- on macOS, Alt+← / Alt+→
+  // elsewhere, where Alt+arrows are not word jumps).
+  await page.keyboard.press(mod === "Meta" ? "Control+-" : "Alt+ArrowLeft");
   await expect(page).toHaveURL(/#main\.go/);
+  await page.keyboard.press(mod === "Meta" ? "Control+Shift+-" : "Alt+ArrowRight");
+  await expect(page).toHaveURL(/#internal\/greet\/greet\.go/);
   // A link with a line opens there after a reload.
   await page.goto(`/r/${ids.alpha}/#big.py:30001`);
   await expect(page.locator(".code-row.current")).toContainText("function_10000");

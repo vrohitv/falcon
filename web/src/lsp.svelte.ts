@@ -9,13 +9,19 @@ export type LspServer = {
   extensions: string[];
   installed: boolean;
   install?: string;
+  /** How to install it on this system, best first, and where each puts it (Falcon looks there). */
+  installs?: { command: string; where: string }[];
+  /** Where Falcon found it. */
+  path?: string;
+  /** Its instances for this folder: one per project root (a folder can hold several projects). */
+  instances?: { root: string; state: string; doing?: string; documents: number }[] | null;
   state?: "" | "starting" | "indexing" | "ready" | "failed" | "exited";
   note?: string;
   navigates?: boolean;
   slow?: boolean;
   at?: string;
 };
-export type LspStatus = { execution: boolean; host_execution: boolean; servers: LspServer[] };
+export type LspStatus = { execution: boolean; host_execution: boolean; os?: string; servers: LspServer[]; searched?: string[] };
 export type LspState = {
   state: "ready" | "indexing" | "starting" | "failed" | "off" | "missing" | "none";
   server?: LspServer;

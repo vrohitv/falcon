@@ -26,7 +26,7 @@ var rawTypes = map[string]string{
 // media, and a policy that lets nothing in it run (an SVG's scripts, an HTML file's anything).
 func (s *Server) raw(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	p := r.URL.Query().Get("path")
-	abs, err := rp.Repo.ReadPath(p)
+	abs, err := s.readable(rp, p)
 	if err != nil {
 		fail(w, err)
 		return

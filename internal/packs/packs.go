@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -27,7 +28,10 @@ type Pack struct {
 type Server struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
-	Install string   `json:"install"`
+	// Install is the first install command for this system; Installs are all of them, by operating
+	// system ("*" for any), each with where it puts the server.
+	Install  string               `json:"install"`
+	Installs map[string][]Install `json:"-"`
 	// Navigates: it answers definition and references (ruff, a linter, only reports problems).
 	Navigates bool `json:"navigates"`
 	// Slow: it reads the whole project before answering (minutes for a large Java or Rust one).
@@ -41,24 +45,69 @@ func pack(language string, ext []string, build, checks []string, servers ...Serv
 	return Pack{Language: language, Extensions: ext, Server: servers[0].Command, Args: servers[0].Args, Servers: servers, BuildFiles: build, Checks: checks}
 }
 
+// installs sets a server's install commands (by operating system, "*" for any) and its first one for
+// this system.
+func installs(s Server, by map[string][]Install) Server {
+	s.Installs = by
+	if list := s.InstallsFor(runtime.GOOS); len(list) > 0 {
+		s.Install = list[0].Command
+	}
+	return s
+}
+
+const (
+	goBin    = "Go's bin folder (GOBIN, or ~/go/bin)"
+	npmBin   = "npm's global folder (npm prefix -g)"
+	npmLocal = "this project's node_modules/.bin (found first)"
+	pipxBin  = "~/.local/bin"
+	cargoBin = "~/.cargo/bin"
+)
+
 var (
-	gopls    = Server{Command: "gopls", Args: []string{}, Install: "go install golang.org/x/tools/gopls@latest", Navigates: true}
-	clangd   = Server{Command: "clangd", Args: []string{"--background-index", "--header-insertion=never"}, Install: "brew install llvm  # or: apt install clangd", Navigates: true}
-	tsserver = Server{Command: "typescript-language-server", Args: []string{"--stdio"}, Install: "npm install -g typescript-language-server typescript", Navigates: true}
+	gopls = installs(Server{Command: "gopls", Args: []string{}, Navigates: true}, map[string][]Install{
+		"*":       {{"go install golang.org/x/tools/gopls@latest", goBin}},
+		"windows": {{"go install golang.org/x/tools/gopls@latest", `%USERPROFILE%\go\bin`}},
+	})
+	clangd = installs(Server{Command: "clangd", Args: []string{"--background-index", "--header-insertion=never"}, Navigates: true}, map[string][]Install{
+		"darwin":  {{"xcode-select --install", "/usr/bin (Apple's command line tools)"}, {"brew install llvm", "/opt/homebrew/opt/llvm/bin"}},
+		"linux":   {{"sudo apt install clangd", "/usr/bin"}, {"sudo dnf install clang-tools-extra", "/usr/bin"}},
+		"windows": {{"winget install LLVM.LLVM", `C:\Program Files\LLVM\bin`}},
+	})
+	tsserver = installs(Server{Command: "typescript-language-server", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
+		"*": {{"npm install -g typescript-language-server typescript", npmBin}, {"npm install --save-dev typescript-language-server typescript", npmLocal}},
+	})
 	// TypeScript 7 (the native compiler) is its own language server: tsc --lsp.
-	tsNative = Server{Command: "tsc", Args: []string{"--lsp", "--stdio"}, Install: "npm install --save-dev typescript@7  # or: npm install -g typescript@7", Navigates: true, Find: nativeTypeScript}
-	jdtls    = Server{Command: "jdtls", Args: []string{"-data", "{data}"}, Install: "brew install jdtls  # needs Java 25 or newer (JAVA_HOME)", Navigates: true, Slow: true}
-	ra       = Server{Command: "rust-analyzer", Args: []string{}, Install: "rustup component add rust-analyzer", Navigates: true, Slow: true}
+	tsNative = installs(Server{Command: "tsc", Args: []string{"--lsp", "--stdio"}, Navigates: true, Find: nativeTypeScript}, map[string][]Install{
+		"*": {{"npm install --save-dev typescript@7", npmLocal}, {"npm install -g typescript@7", npmBin}},
+	})
+	jdtls = installs(Server{Command: "jdtls", Args: []string{"-data", "{data}"}, Navigates: true, Slow: true}, map[string][]Install{
+		"darwin":  {{"brew install jdtls", "/opt/homebrew/bin (needs a recent Java in JAVA_HOME)"}},
+		"linux":   {{"brew install jdtls", "Homebrew's bin folder (needs a recent Java in JAVA_HOME)"}},
+		"windows": {{"scoop install jdtls", `%USERPROFILE%\scoop\shims (needs a recent Java in JAVA_HOME)`}},
+	})
+	ra = installs(Server{Command: "rust-analyzer", Args: []string{}, Navigates: true, Slow: true}, map[string][]Install{
+		"*":       {{"rustup component add rust-analyzer", cargoBin}},
+		"windows": {{"rustup component add rust-analyzer", `%USERPROFILE%\.cargo\bin`}},
+	})
+	basedpyright = installs(Server{Command: "basedpyright-langserver", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
+		"*": {{"pipx install basedpyright", pipxBin}, {"npm install -g basedpyright", npmBin}},
+	})
+	pyright = installs(Server{Command: "pyright-langserver", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
+		"*": {{"npm install -g pyright", npmBin}, {"pipx install pyright", pipxBin}},
+	})
+	pylsp = installs(Server{Command: "pylsp", Args: []string{}, Navigates: true}, map[string][]Install{
+		"*": {{"pipx install python-lsp-server", pipxBin}},
+	})
+	ruff = installs(Server{Command: "ruff", Args: []string{"server"}}, map[string][]Install{
+		"*": {{"pipx install ruff", pipxBin + " (problems only, no navigation)"}},
+	})
 )
 
 // Packs are the languages Falcon supports end to end: C, C++, Python, TypeScript, JavaScript, Go, Java, Rust.
 var Packs = []Pack{
 	pack("go", []string{".go"}, []string{"go.mod", "go.work"}, []string{"go test ./...", "go vet ./..."}, gopls),
 	pack("python", []string{".py", ".pyi"}, []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}, []string{"python -m pytest", "ruff check ."},
-		Server{Command: "basedpyright-langserver", Args: []string{"--stdio"}, Install: "pip install basedpyright  # or: npm install -g basedpyright", Navigates: true},
-		Server{Command: "pyright-langserver", Args: []string{"--stdio"}, Install: "npm install -g pyright  # or: pip install pyright", Navigates: true},
-		Server{Command: "pylsp", Args: []string{}, Install: "pip install python-lsp-server", Navigates: true},
-		Server{Command: "ruff", Args: []string{"server"}, Install: "pip install ruff  # problems only, no navigation"}),
+		basedpyright, pyright, pylsp, ruff),
 	pack("c", []string{".c", ".h"}, []string{"compile_commands.json", "CMakeLists.txt", "Makefile", "meson.build"}, []string{"cmake --build build", "ctest --test-dir build"}, clangd),
 	pack("cpp", []string{".cpp", ".cc", ".cxx", ".c++", ".hpp", ".hh", ".hxx"}, []string{"compile_commands.json", "CMakeLists.txt", "Makefile", "meson.build"}, []string{"cmake --build build", "ctest --test-dir build"}, clangd),
 	pack("typescript", []string{".ts", ".tsx", ".mts", ".cts"}, []string{"tsconfig.json", "package.json"}, []string{"npm test", "npx tsc --noEmit"}, tsNative, tsserver),

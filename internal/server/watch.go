@@ -174,7 +174,7 @@ func (s *Server) watchFiles(w http.ResponseWriter, r *http.Request, rp *workspac
 	}
 	files := map[string]string{}
 	for _, p := range paths {
-		abs, err := rp.Repo.ReadPath(p)
+		abs, err := s.readable(rp, p)
 		if err != nil {
 			fail(w, err)
 			return
@@ -232,7 +232,7 @@ func (s *Server) watchFiles(w http.ResponseWriter, r *http.Request, rp *workspac
 // a file's current hash at discrete moments (focus, tab switch, editing).
 func (s *Server) fileStat(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	p := r.URL.Query().Get("path")
-	abs, err := rp.Repo.ReadPath(p)
+	abs, err := s.readable(rp, p)
 	if err != nil {
 		fail(w, err)
 		return

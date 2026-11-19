@@ -811,3 +811,17 @@ body.resizing * {
   cursor: col-resize !important;
   user-select: none !important;
 }
+
+/* A file outside the folder (reached through a definition): labelled, read-only. */
+.crumb-external {
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.crumb-back:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

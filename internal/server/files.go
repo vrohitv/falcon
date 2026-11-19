@@ -56,7 +56,7 @@ func (s *Server) symbols(w http.ResponseWriter, r *http.Request, rp *workspace.R
 // screen, so a 100,000-line file opens as fast as a short one).
 func (s *Server) codeWindow(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	file := r.URL.Query().Get("path")
-	abs, err := rp.Repo.ReadPath(file)
+	abs, err := s.readable(rp, file)
 	if err != nil {
 		fail(w, err)
 		return
@@ -105,7 +105,7 @@ func (s *Server) highlight(w http.ResponseWriter, r *http.Request, rp *workspace
 }
 
 func (s *Server) outline(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
-	f, err := rp.Repo.Read(r.URL.Query().Get("path"))
+	f, _, err := s.readContent(rp, r.URL.Query().Get("path"))
 	if err != nil {
 		fail(w, err)
 		return
