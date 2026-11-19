@@ -1,0 +1,200 @@
+
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --spark: #ffd59a;
+  --spark-glow: rgb(255 190 110 / 0.55);
+}
+button,
+.button,
+.icon-button,
+input,
+textarea,
+select {
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 180ms ease,
+    transform 180ms var(--ease-out),
+    opacity 160ms ease;
+}
+.button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.button.primary {
+  position: relative;
+  overflow: hidden;
+}
+.button.primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, var(--hover-wash) 50%, transparent 70%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+.button.primary:hover::after {
+  animation: sheen 700ms var(--ease-out);
+}
+svg.spin {
+  animation: spin 900ms linear infinite;
+}
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 0;
+}
+.skeleton {
+  height: 54px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--surface-raised) 0%, var(--surface-hover) 50%, var(--surface-raised) 100%);
+  background-size: 200% 100%;
+  animation:
+    shimmer 1.4s linear infinite,
+    rise 400ms var(--ease-out) both;
+  animation-delay: 0s, calc(var(--i, 0) * 60ms);
+}
+.skeleton:first-child {
+  height: 92px;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tag.warn {
+  background: var(--warn-bg);
+  color: var(--warning);
+}
+.tag.accent {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+.tag.link {
+  border: 0;
+  cursor: pointer;
+}
+.tag.link:hover {
+  color: var(--bright);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ping {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  80%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+@keyframes ping-dot {
+  0% {
+    box-shadow: 0 0 0 0 rgb(179 161 237 / 0.7);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px rgb(179 161 237 / 0);
+  }
+}
+@keyframes tick {
+  0% {
+    color: var(--bright);
+    transform: translateY(-3px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes travel {
+  from {
+    background-position: -60% 0;
+  }
+  to {
+    background-position: 160% 0;
+  }
+}
+@keyframes sheen {
+  to {
+    transform: translateX(120%);
+  }
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes draw-edge {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes breathe-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.04);
+  }
+}
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+*,
+*::before,
+*::after {
+    transition-duration: 0ms !important;
+  }
+}

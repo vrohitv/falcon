@@ -1,0 +1,813 @@
+/* Falcon's shell: activity bar, top bar, stage, status bar, and the dialogs that float over them. The
+   component styles (tree, viewer, editor, Source Control) come from styles.css and git.css. */
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --activity: 52px;
+}
+body.resizing,
+body.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.spin,
+.spin {
+  animation: falcon-spin 0.9s linear infinite;
+}
+@keyframes falcon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.falcon {
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: var(--activity) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 24px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Activity bar */
+.activity {
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
+}
+.activity > button {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--subtle);
+  transition:
+    color 140ms var(--ease-out),
+    background 140ms var(--ease-out),
+    transform 160ms var(--ease-spring);
+}
+.activity > button:hover {
+  color: var(--bright);
+  background: var(--surface-hover);
+}
+.activity > button:active {
+  transform: scale(0.94);
+}
+.activity > button.active {
+  color: var(--bright);
+}
+.activity > button.active::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: falcon-bar 220ms var(--ease-out);
+}
+@keyframes falcon-bar {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0;
+  }
+}
+.activity-mark {
+  margin-bottom: 10px;
+}
+.activity-mark:hover {
+  background: none !important;
+}
+.activity-gap {
+  flex: 1;
+}
+.activity-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-solid);
+  color: var(--on-accent);
+  font:
+    600 9px/16px var(--font-ui);
+  text-align: center;
+}
+
+
+/* Stage */
+.stage {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.stage-view,
+.view-pane {
+  position: absolute;
+  inset: 0;
+}
+.view-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.view-pane > * {
+  flex: 1;
+  min-height: 0;
+}
+.view-pane.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+.loading-screen {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+/* Status bar */
+.falcon > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  height: 22px;
+  border-radius: 3px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.status-item:hover {
+  background: var(--surface-hover);
+  color: var(--bright);
+}
+.status-item.subtle {
+  color: var(--subtle);
+}
+.status-folder strong {
+  font-weight: 600;
+  color: var(--bright);
+}
+.status-changes {
+  color: var(--warning);
+}
+.status-gap {
+  flex: 1;
+}
+
+/* The code view inside the stage */
+.workspace {
+  height: 100%;
+}
+.workspace .file-sidebar {
+  --tree-default: 260px;
+  animation: falcon-side 200ms var(--ease-out);
+}
+@keyframes falcon-side {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+.section-label {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.breadcrumbs .crumb-root {
+  color: var(--subtle);
+}
+.breadcrumbs .crumb-gap {
+  flex: 1;
+}
+.breadcrumbs .crumb-back {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  margin-right: 4px;
+}
+.keyboard-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 18px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+.keyboard-hints kbd {
+  display: inline-block;
+  min-width: 20px;
+  margin-right: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font: 11px var(--font-mono);
+  color: var(--muted);
+  text-align: center;
+}
+.search-results .panel-heading .button {
+  margin-left: 12px;
+}
+
+/* Search panel */
+.search-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+.search-input {
+  position: relative;
+  display: flex;
+}
+.search-input input {
+  flex: 1;
+  padding: 7px 84px 7px 9px;
+  font-size: 12px;
+}
+.search-toggles {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 1px;
+}
+.search-toggles button {
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  color: var(--subtle);
+  border: 1px solid transparent;
+}
+.search-toggles button.on {
+  color: var(--bright);
+  background: var(--accent-muted);
+  border-color: var(--accent-solid);
+}
+.search-glob {
+  padding: 6px 9px;
+  font-size: 11px;
+}
+.search-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+  font-size: 11px;
+  color: var(--subtle);
+}
+.search-summary .bad {
+  color: var(--danger);
+}
+.search-groups {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.search-file {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 10px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+}
+.search-file:hover,
+.search-line.active,
+.search-line:hover {
+  background: var(--surface-hover);
+}
+.search-file svg:first-child {
+  transition: transform 140ms var(--ease-out);
+  flex: none;
+}
+.search-file svg.open {
+  transform: rotate(90deg);
+}
+.search-file strong {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.search-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--subtle);
+  font-size: 11px;
+}
+.search-file em {
+  font-style: normal;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+.search-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 10px 2px 30px;
+  text-align: left;
+}
+.search-ln {
+  flex: none;
+  min-width: 26px;
+  font: 10px var(--font-mono);
+  color: var(--subtle);
+  text-align: right;
+}
+.search-line code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11.5px var(--font-mono);
+  color: var(--muted);
+}
+.search-line mark {
+  background: var(--mark-bg);
+  color: var(--bright);
+  border-radius: 2px;
+  outline: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+}
+
+/* Dialogs: quick open, folders, add folder */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+.palette {
+  position: fixed;
+  z-index: 91;
+  top: 12vh;
+  left: 50%;
+  translate: -50% 0;
+  width: 640px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow:
+    0 24px 80px var(--shadow),
+    0 0 0 1px var(--hover-wash) inset;
+}
+input.palette-input {
+  display: block;
+  width: 100%;
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 10px 10px 0 0;
+  background: none;
+  box-shadow: none;
+  font-size: 14px;
+  color: var(--bright);
+}
+input.palette-input:focus {
+  box-shadow: none;
+}
+.palette-results {
+  max-height: min(52vh, 460px);
+  overflow: auto;
+  padding: 6px;
+  overscroll-behavior: contain;
+}
+/* A row: go-to-file results are buttons; folder rows hold a main button and two icon buttons. Only
+   direct children are rows, so buttons inside a row keep their own size. */
+.palette-results > button,
+.folder-main,
+.browse-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text);
+}
+.palette-results > button.active,
+.folder-row.active,
+.folder-add.active {
+  background: var(--surface-hover);
+}
+.palette-results > button > strong {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--bright);
+}
+.palette-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--subtle);
+  font-size: 11px;
+}
+.palette-path b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.palette-empty {
+  margin: 14px;
+  color: var(--subtle);
+  font-size: 12px;
+  text-align: center;
+}
+.palette-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--subtle);
+  font-size: 11px;
+}
+.palette-footer > span:last-child:not(.add-where) {
+  margin-left: auto;
+}
+.palette-footer kbd {
+  margin-right: 3px;
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font: 10px var(--font-mono);
+}
+.palette-footer .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Folder switcher rows: icon, name over path, branch, current tick; then open-in-tab and remove. */
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  border-radius: 6px;
+}
+.folder-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+}
+.folder-main > svg {
+  flex: none;
+  color: var(--subtle);
+}
+.folder-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.3;
+}
+.folder-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--bright);
+}
+.folder-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--subtle);
+}
+.folder-branch {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 34%;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--surface-hover);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 11px var(--font-mono);
+  color: var(--muted);
+}
+.folder-row.active .folder-branch {
+  background: var(--surface);
+}
+.folder-current {
+  flex: none;
+  color: var(--accent);
+}
+.folder-row > .icon-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+.folder-row.active > .icon-button,
+.folder-row:focus-within > .icon-button {
+  opacity: 1;
+}
+.palette-results > .folder-add {
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* Add a folder */
+.add-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--danger);
+  font-size: 12px;
+}
+.add-error .button {
+  margin-left: auto;
+}
+.browse-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+  border-radius: 6px;
+}
+.browse-entry:hover {
+  background: var(--surface-hover);
+}
+.browse-entry > .browse-row {
+  flex: 1;
+  min-width: 0;
+}
+.browse-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-results > .browse-row:hover {
+  background: var(--surface-hover);
+}
+.git-folder {
+  color: var(--accent);
+}
+.add-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--font-mono);
+}
+
+/* Start page */
+.welcome {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12vh 16px 40px;
+  gap: 22px;
+  background:
+    radial-gradient(600px 300px at 50% 0%, var(--glow), transparent 70%),
+    var(--bg);
+}
+.welcome-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+.welcome-head h1 {
+  margin: 8px 0 0;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--bright);
+}
+.welcome-head p {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--muted);
+}
+.welcome-list {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.welcome-folder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 140ms var(--ease-out),
+    transform 160ms var(--ease-out),
+    background 140ms var(--ease-out);
+}
+.welcome-folder:hover {
+  border-color: var(--accent-solid);
+  background: var(--surface-raised);
+  transform: translateY(-1px);
+}
+.welcome-folder span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.welcome-folder strong {
+  color: var(--bright);
+  font-weight: 500;
+}
+.welcome-folder small {
+  color: var(--subtle);
+  font-size: 11px;
+}
+.welcome-folder em {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: normal 11px var(--font-mono);
+  color: var(--subtle);
+}
+.welcome-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.welcome-hint {
+  color: var(--subtle);
+  font-size: 12px;
+}
+.welcome-hint code {
+  font: 11px var(--font-mono);
+  color: var(--muted);
+}
+.login-screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.login-screen h1 {
+  margin: 0 0 10px;
+  color: var(--bright);
+}
+.login-screen form {
+  display: flex;
+  gap: 8px;
+}
+.toast {
+  border-radius: 8px;
+  bottom: 40px;
+}
+.git-banner .icon-button {
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .wide-only {
+    display: none !important;
+  }
+  .status-folder {
+    flex: none;
+  }
+  .falcon {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+  .activity {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Phone-only controls */
+.mobile-only,
+.files-toggle {
+  display: none !important;
+}
+@media (max-width: 760px) {
+  .mobile-only {
+    display: inline-flex !important;
+  }
+  .files-toggle {
+    display: grid !important;
+  }
+  .workspace .file-sidebar {
+    position: fixed;
+    inset: 40px auto 24px 0;
+    z-index: 30;
+    width: min(320px, 86vw);
+    transform: translateX(-100%);
+    transition: transform 220ms var(--ease-out);
+  }
+  .workspace .file-sidebar.open {
+    transform: none;
+  }
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    background: var(--scrim);
+  }
+}
+
+/* Switching themes cross-fades colours instead of snapping. */
+.theme-changing,
+.theme-changing * {
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out),
+    color 220ms var(--ease-out) !important;
+}
+
+.symbol-badge {
+  flex: none;
+  width: 22px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font: 600 9px/1 var(--font-mono);
+  text-transform: lowercase;
+  color: var(--syn-function);
+  background: color-mix(in srgb, var(--syn-function) 14%, transparent);
+}
+.symbol-badge:is([data-kind="type"], [data-kind="struct"], [data-kind="class"], [data-kind="interface"], [data-kind="enum"], [data-kind="trait"]) {
+  color: var(--syn-class);
+  background: color-mix(in srgb, var(--syn-class) 14%, transparent);
+}
+.symbol-badge:is([data-kind="var"], [data-kind="const"]) {
+  color: var(--syn-number);
+  background: color-mix(in srgb, var(--syn-number) 14%, transparent);
+}
