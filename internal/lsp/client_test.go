@@ -117,3 +117,19 @@ func TestFramedProcessSyncAndCancellation(t *testing.T) {
 		t.Fatalf("%s", response)
 	}
 }
+
+func TestSettingsAnswerConfigurationBySection(t *testing.T) {
+	s := map[string]any{"python": map[string]any{"analysis": map[string]any{"typeCheckingMode": "basic"}}, "rust-analyzer": map[string]any{"linkedProjects": []string{"/r/a/Cargo.toml"}}}
+	if got := section(s, "python.analysis"); got.(map[string]any)["typeCheckingMode"] != "basic" {
+		t.Fatalf("python.analysis: %v", got)
+	}
+	if got := section(s, "rust-analyzer"); got == nil {
+		t.Fatal("rust-analyzer section")
+	}
+	if got := section(s, "gopls"); got != nil {
+		t.Fatalf("a section not given is null: %v", got)
+	}
+	if got := section(nil, "x.y"); got != nil {
+		t.Fatalf("no settings: %v", got)
+	}
+}

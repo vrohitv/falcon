@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -155,6 +156,68 @@ func (p *Pool) Statuses() []Status {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Command < out[j].Command })
 	return out
+}
+
+// Change is a file that changed on disk: its path and whether it was created, changed or deleted.
+type Change struct {
+	Path string
+	Kind int // 1 created, 2 changed, 3 deleted
+}
+
+// Serving reports whether any server runs for a folder (so watching for changes is worth doing).
+func (p *Pool) Serving(folder string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, r := range p.servers {
+		if within(folder, r.Root) {
+			return true
+		}
+	}
+	return false
+}
+
+// FilesChanged tells the servers of a folder what changed on disk. A document a server has open is
+// brought up to date first (sent its new text, or closed when it was deleted), then every change is
+// reported, so each server's picture of the whole repository matches the disk.
+func (p *Pool) FilesChanged(folder string, changes []Change) {
+	if len(changes) == 0 {
+		return
+	}
+	p.mu.Lock()
+	var running []*Running
+	for _, r := range p.servers {
+		if within(folder, r.Root) && r.Client() != nil && r.client.Alive() {
+			running = append(running, r)
+		}
+	}
+	p.mu.Unlock()
+	for _, r := range running {
+		events := make([]FileEvent, 0, len(changes))
+		for _, c := range changes {
+			uri := URI(c.Path)
+			events = append(events, FileEvent{URI: uri, Type: c.Kind})
+			r.mu.Lock()
+			_, open := r.sent[uri]
+			r.mu.Unlock()
+			if !open {
+				continue
+			}
+			if c.Kind == 3 {
+				r.mu.Lock()
+				delete(r.sent, uri)
+				r.mu.Unlock()
+				_ = r.client.Closed(uri)
+			} else if b, err := os.ReadFile(c.Path); err == nil {
+				_ = r.Sync(uri, "", string(b))
+			}
+		}
+		_ = r.client.FilesChanged(events)
+	}
+}
+
+func within(folder, path string) bool {
+	rel, err := filepath.Rel(folder, path)
+	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
 // Close stops every server.

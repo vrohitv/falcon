@@ -43,6 +43,7 @@ type Server struct {
 	lsps      *lsp.Pool
 	lspRuns   lspRuns
 	external  externalFiles
+	lspWatch  lspWatch
 	git       gitState
 	idxMu     sync.Mutex
 	indexes   map[string]*index.Index

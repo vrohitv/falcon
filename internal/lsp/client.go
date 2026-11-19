@@ -37,6 +37,7 @@ type Client struct {
 	done         chan struct{}
 	home         string
 	root         string
+	settings     map[string]any
 	closeOnce    sync.Once
 	Capabilities json.RawMessage
 	// Work the server says it is doing ($/progress tokens begun and not ended), and whether it says it is
@@ -56,6 +57,9 @@ type Options struct {
 	Env         []string
 	InitOptions any
 	InitTimeout time.Duration
+	// Settings answer the server's workspace/configuration requests, by section ("rust-analyzer",
+	// "python.analysis"); a section not given is answered with null (the server's defaults).
+	Settings map[string]any
 }
 
 // URI is a file path as a file: URI (a Windows path C:\x becomes file:///C:/x).
@@ -83,9 +87,12 @@ func FromURI(uri string) string {
 // clientCapabilities are what Falcon's editor can use: navigation, hover in Markdown, hierarchical symbols,
 // diagnostics, and progress reports (so it knows when a server is still indexing).
 var clientCapabilities = map[string]any{
-	"general":   map[string]any{"positionEncodings": []string{"utf-16"}},
-	"window":    map[string]any{"workDoneProgress": true},
-	"workspace": map[string]any{"configuration": true, "workspaceFolders": true},
+	"general": map[string]any{"positionEncodings": []string{"utf-16"}},
+	"window":  map[string]any{"workDoneProgress": true},
+	// Falcon watches the folder and reports changes on disk (a branch switch, a terminal, a build) with
+	// workspace/didChangeWatchedFiles, so a server's picture of the whole repository stays current.
+	"workspace": map[string]any{"configuration": true, "workspaceFolders": true,
+		"didChangeWatchedFiles": map[string]any{"dynamicRegistration": true, "relativePatternSupport": true}},
 	"textDocument": map[string]any{
 		"synchronization":    map[string]any{"dynamicRegistration": false, "didSave": true},
 		"hover":              map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
@@ -131,7 +138,7 @@ func StartWith(ctx context.Context, o Options) (*Client, error) {
 		os.RemoveAll(home)
 		return nil, err
 	}
-	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, root: root, progress: map[string]string{}, diagAt: map[string]time.Time{}}
+	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, root: root, settings: o.Settings, progress: map[string]string{}, diagAt: map[string]time.Time{}}
 	go c.read(stdout)
 	timeout := o.InitTimeout
 	if timeout == 0 {
@@ -248,10 +255,16 @@ func (c *Client) read(reader io.Reader) {
 				switch msg.Method {
 				case "workspace/configuration":
 					var p struct {
-						Items []any `json:"items"`
+						Items []struct {
+							Section string `json:"section"`
+						} `json:"items"`
 					}
 					_ = json.Unmarshal(msg.Params, &p)
-					result = make([]any, len(p.Items))
+					answers := make([]any, len(p.Items))
+					for i, item := range p.Items {
+						answers[i] = section(c.settings, item.Section)
+					}
+					result = answers
 				case "workspace/applyEdit":
 					result = map[string]any{"applied": false, "failureReason": "Edits must pass through the repository broker"}
 				case "workspace/workspaceFolders":
@@ -407,6 +420,44 @@ func (c *Client) Sync(uri, language, text string) error {
 	}
 	return c.Notify("textDocument/didChange", map[string]any{"textDocument": map[string]any{"uri": uri, "version": v}, "contentChanges": []any{map[string]string{"text": text}}})
 }
+
+// Closed tells the server a document is no longer open (it was deleted): it reads it from disk again.
+func (c *Client) Closed(uri string) error {
+	c.mu.Lock()
+	delete(c.versions, uri)
+	c.mu.Unlock()
+	return c.Notify("textDocument/didClose", map[string]any{"textDocument": map[string]string{"uri": uri}})
+}
+
+// FileEvent is a change on disk: 1 created, 2 changed, 3 deleted (the LSP's FileChangeType).
+type FileEvent struct {
+	URI  string `json:"uri"`
+	Type int    `json:"type"`
+}
+
+// FilesChanged reports changes on disk.
+func (c *Client) FilesChanged(events []FileEvent) error {
+	return c.Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": events})
+}
+
+// section is a dotted section of settings ("python.analysis" → settings["python"]["analysis"]), or nil.
+func section(settings map[string]any, name string) any {
+	if name == "" {
+		return settings
+	}
+	var cur any = settings
+	for _, part := range strings.Split(name, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if cur, ok = m[part]; !ok {
+			return nil
+		}
+	}
+	return cur
+}
+
 func (c *Client) Diagnostics(uri string) json.RawMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()

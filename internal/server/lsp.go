@@ -269,9 +269,13 @@ type served struct {
 }
 
 // server gives the running language server for a file, started if need be, with the file's text synced.
-// It runs at the file's project root (found from go.mod, Cargo.toml, package.json and the like), with a
-// PATH that holds the folder it was found in and the project's own tools. A file outside the folder (an
-// ~ext/ path) uses the server of the project it was reached from.
+// One server per language serves the whole folder, as editors do: the folder is its workspace, and the
+// server finds the projects inside it itself (gopls builds each Go module as its files are opened, or
+// all of a go.work at once; tsserver reads every tsconfig; jdtls imports every Maven and Gradle project;
+// clangd finds the compile_commands.json of each file). rust-analyzer, which looks only one level deep,
+// is given every Cargo workspace and stand-alone crate (its linkedProjects setting). The file's own
+// project is only used to find a server it installed (node_modules/.bin, .venv). A file outside the
+// folder (an ~ext/ path) uses the server of the folder file it was reached from.
 func (s *Server) server(ctx context.Context, rp *workspace.Repo, path, from string) (served, error) {
 	var sv served
 	if s.NoLSP {
@@ -295,8 +299,9 @@ func (s *Server) server(ctx context.Context, rp *workspace.Repo, path, from stri
 			at = "."
 		}
 	}
-	root := pack.ProjectRoot(rp.Repo.Path, at)
-	chosen, command, ok := pack.ResolveIn(root, packs.Look(root, rp.Repo.Path))
+	project := pack.ProjectRoot(rp.Repo.Path, at)
+	root := rp.Repo.Path
+	chosen, command, ok := pack.ResolveIn(project, packs.Look(project, root))
 	sv.chosen, sv.root = chosen, root
 	if !ok {
 		first := pack.Servers[0]
@@ -316,16 +321,25 @@ func (s *Server) server(ctx context.Context, rp *workspace.Repo, path, from stri
 	if chosen.Slow {
 		timeout = 3 * time.Minute
 	}
-	env := lsp.Env("PATH=" + packs.SearchPath(command, root, rp.Repo.Path))
-	if venv := filepath.Join(root, ".venv"); dirExists(venv) {
-		env = append(env, "VIRTUAL_ENV="+venv)
+	env := lsp.Env("PATH=" + packs.SearchPath(command, project, root))
+	for _, dir := range []string{project, root} {
+		if venv := filepath.Join(dir, ".venv"); dirExists(venv) {
+			env = append(env, "VIRTUAL_ENV="+venv)
+			break
+		}
 	}
-	running, err := s.lsps.Get(ctx, lsp.Options{Root: root, Command: command, Args: args, Env: env, InitTimeout: timeout, InitOptions: initOptions(root, chosen.Command, command)})
+	settings := s.serverSettings(rp, chosen.Command)
+	init := initOptions(root, chosen.Command, command)
+	if init == nil && settings != nil {
+		init = settings[chosen.Command]
+	}
+	running, err := s.lsps.Get(ctx, lsp.Options{Root: root, Command: command, Args: args, Env: env, InitTimeout: timeout, InitOptions: init, Settings: settings})
 	if err != nil {
 		s.lspRuns.note(root, chosen.Command, "failed", err.Error())
 		return sv, err
 	}
 	sv.running, sv.uri = running, lsp.URI(abs)
+	s.watchForServers(rp)
 	if err = running.Sync(sv.uri, packs.LanguageID(path, language), file.Content); err != nil {
 		s.lspRuns.note(root, chosen.Command, "failed", err.Error())
 		return sv, err

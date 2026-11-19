@@ -354,7 +354,11 @@ func (s *Server) watchGit(rp *workspace.Repo) (*gitWatch, chan int, error) {
 					if gw.t != nil {
 						gw.t.Stop()
 					}
-					gw.t = time.AfterFunc(120*time.Millisecond, func() { gw.fire() })
+					gw.t = time.AfterFunc(120*time.Millisecond, func() {
+						gw.fire()
+						// A commit, a checkout, a pull: what changed is reported to the language servers.
+						go s.reportChanges(rp)
+					})
 					gw.mu.Unlock()
 				case _, ok := <-fw.Errors:
 					if !ok {
@@ -439,6 +443,7 @@ func (s *Server) watchTree(rp *workspace.Repo, gw *gitWatch) {
 		if changed {
 			s.index(rp).Invalidate()
 			gw.fire()
+			go s.reportChanges(rp)
 		}
 	}
 }

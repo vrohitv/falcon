@@ -95,3 +95,26 @@ func TestLanguageServerStateIsPerFolder(t *testing.T) {
 		}
 	}
 }
+
+func TestRustAnalyzerIsGivenEveryCargoProject(t *testing.T) {
+	h := newHarness(t, "")
+	root := h.a.Repo.Path
+	for p, text := range map[string]string{
+		"rust/engine/Cargo.toml":      "[workspace]\nmembers = [\"core\"]\n",
+		"rust/engine/core/Cargo.toml": "[package]\nname = \"core\"\n",
+		"tools/deep/cli/Cargo.toml":   "[package]\nname = \"cli\"\n",
+		"tools/deep/cli/src/main.rs":  "fn main() {}\n",
+		"rust/engine/core/src/lib.rs": "pub fn f() {}\n",
+	} {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte(text), 0o644)
+	}
+	got := h.s.serverSettings(h.a, "rust-analyzer")["rust-analyzer"].(map[string]any)["linkedProjects"].([]string)
+	want := []string{filepath.Join(root, "rust/engine/Cargo.toml"), filepath.Join(root, "tools/deep/cli/Cargo.toml")}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("linkedProjects: %v, want %v (the workspace, and the crate in none; not the member)", got, want)
+	}
+	if h.s.serverSettings(h.a, "gopls") != nil {
+		t.Fatal("gopls finds its modules itself")
+	}
+}
