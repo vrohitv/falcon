@@ -135,6 +135,7 @@ func New(ws *workspace.Workspace, token, assets, data string) *Server {
 		"GET files":            s.files,
 		"GET fuzzy":            s.fuzzy,
 		"GET code":             s.codeWindow,
+		"GET code/shape":       s.codeShape,
 		"POST highlight":       s.highlight,
 		"GET outline":          s.outline,
 		"GET definition":       s.definitions,

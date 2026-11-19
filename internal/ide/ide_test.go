@@ -170,3 +170,16 @@ func TestHighlightWindowsPassAndDiffs(t *testing.T) {
 		t.Fatalf("a deletion sits before working-tree line 1: %+v", hunks[0].Rows[0])
 	}
 }
+
+func TestShapeIsIndentAndLengthPerLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.go")
+	os.WriteFile(path, []byte("package x\n\nfunc f() {\n\treturn\n}\n"), 0o644)
+	d, err := Open(path, "s.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0, 9, 0, 0, 0, 10, 4, 10, 0, 1, 0, 0}
+	if got := d.Shape(); string(got) != string(want) {
+		t.Fatalf("shape %v, want %v", got, want)
+	}
+}

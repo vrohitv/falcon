@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"github.com/vrohitv/falcon/internal/sysenv"
 	"net/http"
@@ -85,6 +86,22 @@ func (s *Server) codeWindow(w http.ResponseWriter, r *http.Request, rp *workspac
 		}
 	}
 	respond(w, map[string]any{"path": file, "start": start, "total": doc.Total, "max_columns": doc.MaxCols, "language": doc.Lang, "hash": doc.Hash, "lines": lines, "exact": exact, "refine": refine && !exact, "raw": raw})
+}
+
+// codeShape is a file's outline for the minimap: two bytes a line (indent, length), base64.
+func (s *Server) codeShape(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
+	file := r.URL.Query().Get("path")
+	abs, err := s.readable(rp, file)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	doc, err := ide.Open(abs, file)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	respond(w, map[string]any{"hash": doc.Hash, "total": doc.Total, "shape": base64.StdEncoding.EncodeToString(doc.Shape())})
 }
 
 // highlight colours an editor's unsaved text; the editor sends only the lines around what is on screen.

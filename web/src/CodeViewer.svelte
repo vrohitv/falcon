@@ -21,6 +21,7 @@
   import { lsp } from "./lsp.svelte";
   import Markdown from "./Markdown.svelte";
   import LspStatus from "./LspStatus.svelte";
+  import Minimap from "./Minimap.svelte";
   import { fly } from "./motion";
   import {
     ArrowUpRight,
@@ -253,6 +254,14 @@
     caretEl.classList.add("blink");
   }
 
+  // What the minimap marks: problems, find matches (while finding) and the caret's line.
+  const minimapMarks = $derived.by(() => {
+    const out: { line: number; kind: "error" | "warning" | "find" | "current" }[] = [];
+    if (findOpen) for (const m of matches.slice(0, 5000)) out.push({ line: m.line, kind: "find" });
+    for (const p of problems) if (p.severity === "error" || p.severity === "warning") out.push({ line: p.line, kind: p.severity });
+    out.push({ line: current, kind: "current" });
+    return out;
+  });
   // Find in the file (Ctrl+F): over the whole file, not just the lines on screen. The text is fetched once
   // per version of the file; matches are highlighted where they are visible, the current one selected.
   type Match = { line: number; col: number; len: number };
@@ -1280,6 +1289,7 @@
       <button class="icon-button" title="Next match (Enter)" aria-label="Next match" disabled={!matches.length} onclick={() => step(1)}><ArrowDown size={14} /></button>
       <button class="icon-button" title="Close (Esc)" aria-label="Close find" onclick={closeFind}><X size={14} /></button>
     </div>{/if}
+  <div class="code-body">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_static_element_interactions -->
   <div
     class="code-viewport"
@@ -1318,6 +1328,8 @@
       <div class="code-rows" bind:this={rows}></div>
       <div class="code-caret" bind:this={caretEl} aria-hidden="true"></div>
     </div>
+  </div>
+  {#if meta}<Minimap {path} hash={meta.hash} total={meta.total} {viewport} lineHeight={LH} marks={minimapMarks} />{/if}
   </div>
   {#if peek && !picker}<div class="def-peek" style:left="{peek.x + 12}px" style:top="{peek.y + 18}px" in:fly={{ y: 4, duration: 120 }}>
       <code>{peek.targets[0].signature || peek.name}</code>
@@ -1393,6 +1405,15 @@
 </div>
 
 <style>
+  .code-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+  }
+  .code-body > .code-viewport {
+    min-width: 0;
+  }
   .code-viewer {
     position: relative;
     height: 100%;
@@ -1734,7 +1755,7 @@
   .find-bar {
     position: absolute;
     top: 46px;
-    right: 22px;
+    right: 72px; /* clear of the scrollbar and the minimap */
     z-index: 6;
     display: flex;
     align-items: center;

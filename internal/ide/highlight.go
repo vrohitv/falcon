@@ -175,6 +175,7 @@ type Doc struct {
 	key    string
 
 	mu      sync.Mutex
+	shape   []byte           // two bytes a line: indent and length in columns (for the minimap)
 	windows map[int][]string // highlighted windows by number
 	whole   []string         // the whole file, once its background pass is done
 	pass    bool             // a background pass was started
@@ -209,6 +210,45 @@ func (d *Doc) Lines(start, end int) ([]string, bool) {
 		out = append(out, lines[from:to]...)
 	}
 	return out, d.lexer == nil
+}
+
+// Shape is the file's outline for a minimap: two bytes a line, its indent and its length in columns
+// (tabs as four, each capped at 255). Computed once per document, from the text alone.
+func (d *Doc) Shape() []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.shape != nil {
+		return d.shape
+	}
+	out := make([]byte, 0, d.Total*2)
+	for i := 0; i < d.Total; i++ {
+		line := d.src[d.starts[i] : d.starts[i+1]-1]
+		indent, width, leading := 0, 0, true
+		for j := 0; j < len(line); j++ {
+			c := line[j]
+			switch {
+			case c == '\t':
+				width += 4 - width%4
+			case c == '\r':
+				continue
+			case c < utf8.RuneSelf || utf8.RuneStart(c):
+				width++
+			default:
+				continue
+			}
+			if leading && (c == ' ' || c == '\t') {
+				indent = width
+			} else {
+				leading = false
+			}
+		}
+		if leading {
+			indent, width = 0, 0 // a blank line
+		}
+		out = append(out, byte(min(indent, 255)), byte(min(width, 255)))
+	}
+	d.shape = out
+	return out
 }
 
 // Exact says whether every line is exact now (done), or will be once the background pass ends (coming).
