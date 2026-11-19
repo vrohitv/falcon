@@ -16,14 +16,13 @@ falcon ~/code/app ~/code/api      # then open http://127.0.0.1:7700
 
 **Read**
 - Opens any file instantly, however long: the viewer fetches only the lines on screen, highlighted.
-- ⌘-click (Ctrl-click) or F12 goes to a definition, with the name selected there; ⇧F12 lists
-  references with their code; Back and Forward retrace your steps (⌃- / ⌃⇧- on macOS, Alt+← / Alt+→
-  elsewhere, or the mouse's side buttons). Definitions in the standard library or a dependency open
+- Ctrl+click or F12 goes to a definition, with the name selected there; Shift+F12 lists references
+  with their code; Back and Forward retrace your steps (Alt+← / Alt+→, or the mouse's side buttons). Definitions in the standard library or a dependency open
   read-only, and you can keep navigating inside them.
 - Rest on a name for its signature and documentation; problems are underlined (with a language
   server installed: gopls, clangd, basedpyright/pyright, TypeScript, jdtls, rust-analyzer).
-- Go to file (⌘P, `name:line`), go to symbol (⌘T: every declaration in the folder, from an index kept on
-  disk and refreshed as files change), search the folder as you type (⌘⇧F: case, whole word, regex, file
+- Go to file (Ctrl+P, `name:line`), go to symbol (Ctrl+Shift+O: every declaration in the folder, from an index
+  kept on disk and refreshed as files change), search the folder as you type (Ctrl+Shift+F: case, whole word, regex, file
   patterns), outline of the open file, links to a line (`/r/<folder>/#path:line`).
 
 **View every kind of file**
@@ -53,7 +52,7 @@ falcon ~/code/app ~/code/api      # then open http://127.0.0.1:7700
 - File icons from the same line-icon family as the rest of the UI, tinted by language.
 
 **Many folders, one server**
-- ⌘K switches the folder in this tab; ⌘↵ opens it in a new tab. Folders added from the UI (with a
+- Ctrl+K switches the folder in this tab; Ctrl+Enter opens it in a new tab. Folders added from the UI (with a
   folder browser) or the command line are remembered.
 
 ## Build and install
@@ -70,7 +69,7 @@ git clone https://github.com/vrohitv/falcon; cd falcon
 falcon -open C:\code\my-project
 ```
 
-**macOS and Linux:**
+**Linux:**
 
 ```sh
 git clone https://github.com/vrohitv/falcon && cd falcon
@@ -84,7 +83,7 @@ Changing the UI needs Node.js: `.\build.ps1 -Web` or `./build.sh --web` (or `mak
 
 ## Language servers
 
-Falcon runs the language servers you have installed; without one, ⌘-click falls back to matching
+Falcon runs the language servers you have installed; without one, Ctrl+click falls back to matching
 declarations by name. The LSP pill in the editor's status bar lists each server for the folder: where
 it was found, whether it is running (one per project: a Go module or a web app inside the folder gets
 its own), and, for one that is missing, the command to install it on your system and where that puts it.
@@ -95,7 +94,7 @@ not have to be on Falcon's PATH: Falcon looks in
 1. the project's own `node_modules/.bin` and `.venv` (a project's version wins),
 2. your PATH,
 3. the folders installers use: Go's bin folder (`GOBIN`, `~/go/bin`), `~/.cargo/bin`, `~/.local/bin`
-   (pipx, uv), npm's global folder, nvm, Volta and Bun, Homebrew (including its LLVM for clangd), and on
+   (pipx, uv), npm's global folder, nvm, Volta and Bun, the distribution's LLVM folders for clangd, and on
    Windows `%APPDATA%\npm`, `%USERPROFILE%\go\bin`, `C:\Program Files\LLVM\bin`, Scoop and WinGet.
 
 A server runs with the folder it was found in and the project's tools first on its PATH (so a project's
@@ -121,25 +120,28 @@ Without arguments Falcon serves the folders it served last time, or the current 
 
 ## Keys
 
+Falcon runs on Windows and Linux; every shortcut uses Ctrl and Alt.
+
 | | |
 | --- | --- |
-| ⌘P | Go to file |
-| ⌘T (or # in go to file) | Go to symbol: any function, type or class in the folder |
-| ⌘F | Find in the file (Enter / ⇧Enter next and previous; ⌥C ⌥W ⌥R case, word, regex) |
-| F3, ⌘G (⇧ for back) | Next find match after closing the find bar |
-| ⌘⇧F | Search the folder (↑ ↓ and Enter in the results) |
-| ⌃- / ⌃⇧- (macOS), Alt+← / Alt+→ | Back / Forward |
-| ⌘K | Switch folder |
-| ⌘⇧E / ⌘B | Explorer / toggle the sidebar |
-| ⌃⇧G | Source Control |
-| F12, ⌘-click | Definition |
-| Shift + arrows, ⌥⇧← →, ⌘A | Select (drag, double-click a word, triple-click or the gutter for lines) |
-| ⇧F12 | References |
-| ⌘F12 | Implementations |
+| Ctrl+P | Go to file |
+| Ctrl+Shift+O (or # in go to file) | Go to symbol: any function, type or class in the folder |
+| Ctrl+F | Find in the file (Enter / Shift+Enter next and previous; Alt+C, Alt+W, Alt+R: case, word, regex) |
+| F3, Ctrl+G (Shift for back) | Next find match after closing the find bar |
+| Ctrl+Shift+F | Search the folder (↑ ↓ and Enter in the results) |
+| F12, Ctrl+click | Definition |
+| Shift+F12 | References |
+| Ctrl+F12 | Implementations |
+| Alt+← / Alt+→ | Back / Forward (or the mouse's side buttons) |
 | F8 | Next problem |
-| Alt-← | Back |
-| ⌘⇧↵ | Edit the open file |
-| ⌘S | Save |
+| Ctrl+\\ | Split the editor to the right (Ctrl+Alt+\\ below) |
+| Ctrl+1 … Ctrl+4 | Focus an editor group |
+| Ctrl+K | Switch folder |
+| Ctrl+Shift+E / Ctrl+B | Explorer / toggle the sidebar |
+| Ctrl+Shift+G | Source Control |
+| Shift+arrows, Ctrl+Shift+← →, Ctrl+A | Select (drag, double-click a word, triple-click or the gutter for lines) |
+| Ctrl+Shift+Enter | Edit the open file |
+| Ctrl+S | Save |
 
 ## Design
 

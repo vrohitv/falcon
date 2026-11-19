@@ -37,7 +37,7 @@
     zoom = Math.min(16, Math.max(0.05, Math.round(cur * by * 100) / 100));
   }
   function wheel(e: WheelEvent) {
-    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!e.ctrlKey) return;
     e.preventDefault();
     step(e.deltaY < 0 ? 1.15 : 1 / 1.15);
   }
@@ -122,9 +122,9 @@
     {#if size != null}<span class="media-meta">{bytes(size)}</span>{/if}
     <span class="media-gap"></span>
     {#if viewer === "image" || viewer === "svg"}
-      <button class="icon-button" title="Zoom out (⌘-scroll)" aria-label="Zoom out" onclick={() => step(1 / 1.25)}><ZoomOut size={15} /></button>
+      <button class="icon-button" title="Zoom out (Ctrl+scroll)" aria-label="Zoom out" onclick={() => step(1 / 1.25)}><ZoomOut size={15} /></button>
       <span class="media-zoom">{zoom === "fit" ? "Fit" : Math.round(zoom * 100) + "%"}</span>
-      <button class="icon-button" title="Zoom in (⌘-scroll)" aria-label="Zoom in" onclick={() => step(1.25)}><ZoomIn size={15} /></button>
+      <button class="icon-button" title="Zoom in (Ctrl+scroll)" aria-label="Zoom in" onclick={() => step(1.25)}><ZoomIn size={15} /></button>
       <button class="icon-button" class:on={zoom === "fit"} title="Fit to the window" aria-label="Fit" onclick={() => (zoom = "fit")}><Maximize size={15} /></button>
       <button class="icon-button" class:on={zoom === 1} title="Actual size" aria-label="Actual size" onclick={() => (zoom = 1)}><Scan size={15} /></button>
     {/if}

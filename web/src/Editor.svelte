@@ -230,7 +230,7 @@
 
   function key(e: KeyboardEvent) {
     if (!area) return;
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    if (e.ctrlKey && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void save(false);
       return;
@@ -263,7 +263,7 @@
       area.setSelectionRange(lineStart, lineStart + changed.length);
       return;
     }
-    if (e.key === "Enter" && !e.isComposing && !e.altKey && !e.metaKey && !e.ctrlKey) {
+    if (e.key === "Enter" && !e.isComposing && !e.altKey && !e.ctrlKey) {
       e.preventDefault();
       const lineStart = text.lastIndexOf("\n", s - 1) + 1;
       const current = text.slice(lineStart, s);
@@ -350,7 +350,7 @@
         disabled={!dirty || saving}
         onclick={() => save(false)}
         aria-label="Save file"
-        ><Save size={13} />{saving ? "Saving…" : "Save"}<kbd>⌘S</kbd></button
+        ><Save size={13} />{saving ? "Saving…" : "Save"}<kbd>Ctrl+S</kbd></button
       ><button class="button small-button" onclick={finish} aria-label="Done editing"
         ><X size={13} />Done</button
       >

@@ -4,7 +4,7 @@ import { execSync } from "node:child_process";
 import { join } from "node:path";
 
 const dir = join(import.meta.dirname, "..", ".e2e");
-const mod = process.platform === "darwin" ? "Meta" : "Control";
+const mod = "Control"; // Falcon runs on Windows and Linux: every shortcut is Ctrl
 
 // Falcon must never reach beyond itself.
 function offline(page: Page) {
@@ -27,7 +27,7 @@ async function repoIDs(page: Page) {
   return Object.fromEntries(repos.map((x: { name: string; id: string }) => [x.name, x.id])) as Record<string, string>;
 }
 
-test("one server, a folder per tab, switched from the start page and ⌘K", async ({ page, context }) => {
+test("one server, a folder per tab, switched from the start page and Ctrl+K", async ({ page, context }) => {
   const done = offline(page);
   const ids = await repoIDs(page);
   await page.goto("/");
@@ -38,7 +38,7 @@ test("one server, a folder per tab, switched from the start page and ⌘K", asyn
   await expect(page).toHaveURL(`/r/${ids.alpha}/`);
   await expect(page.getByRole("treeitem", { name: "main.go" })).toBeVisible();
   await expect(page).toHaveTitle("alpha · Falcon");
-  // ⌘K switches this tab.
+  // Ctrl+K switches this tab.
   await page.keyboard.press(`${mod}+k`);
   await page.getByRole("textbox", { name: "Switch folder" }).fill("beta");
   await page.keyboard.press("Enter");
@@ -57,7 +57,7 @@ test("one server, a folder per tab, switched from the start page and ⌘K", asyn
   done();
 });
 
-test("go to file, a link to the line, and ⌘-click to the definition", async ({ page }) => {
+test("go to file, a link to the line, and Ctrl+click to the definition", async ({ page }) => {
   const done = offline(page);
   const ids = await repoIDs(page);
   await page.goto(`/r/${ids.alpha}/`);
@@ -67,7 +67,7 @@ test("go to file, a link to the line, and ⌘-click to the definition", async ({
   await page.keyboard.press("Enter");
   await expect(page.locator(".code-row").first()).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/r/${ids.alpha}/#main.go`));
-  // ⌘-click Hello: it lives in another file.
+  // Ctrl+click Hello: it lives in another file.
   await expect(page.locator(".code-text", { hasText: "greet.Hello" })).toBeVisible();
   const point = await page.evaluate(() => {
     for (const row of document.querySelectorAll(".code-text")) {
@@ -91,11 +91,11 @@ test("go to file, a link to the line, and ⌘-click to the definition", async ({
   await page.keyboard.up(mod);
   await expect(page).toHaveURL(/#internal\/greet\/greet\.go:4/);
   await expect(page.locator(".code-row.current")).toContainText("func Hello");
-  // Back returns to where the jump started; Forward goes there again (⌃- / ⌃⇧- on macOS, Alt+← / Alt+→
+  // Back returns to where the jump started; Forward goes there again (Alt+← / Alt+→
   // elsewhere, where Alt+arrows are not word jumps).
-  await page.keyboard.press(mod === "Meta" ? "Control+-" : "Alt+ArrowLeft");
+  await page.keyboard.press("Alt+ArrowLeft");
   await expect(page).toHaveURL(/#main\.go/);
-  await page.keyboard.press(mod === "Meta" ? "Control+Shift+-" : "Alt+ArrowRight");
+  await page.keyboard.press("Alt+ArrowRight");
   await expect(page).toHaveURL(/#internal\/greet\/greet\.go/);
   // A link with a line opens there after a reload.
   await page.goto(`/r/${ids.alpha}/#big.py:30001`);
@@ -264,7 +264,7 @@ test("Source Control: rapid stage and unstage stay in order; Commit & Push", asy
     await page.getByRole("menuitem", { name: /Commit & Publish branch/ }).click();
     await expect(page.locator(".git-tracking")).toBeVisible();
     expect(execSync("git log --oneline -1 main", { cwd: join(dir, "remote.git") }).toString()).toContain("Add one and three");
-    // Now tracked: ⌘⇧Enter commits and pushes.
+    // Now tracked: Ctrl+⇧Enter commits and pushes.
     await page.getByRole("button", { name: "Stage two.txt" }).click();
     await page.getByLabel("Commit message").fill("Add two");
     await page.getByLabel("Commit message").press(`${mod}+Shift+Enter`);

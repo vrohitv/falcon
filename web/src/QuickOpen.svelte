@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Go to file (⌘P): fuzzy-match every file in the folder; name:N goes to a line. Starting with # searches
-  // every declared name instead (go to symbol, ⌘T), from the folder's symbol index.
+  // Go to file (Ctrl+P): fuzzy-match every file in the folder; name:N goes to a line. Starting with # searches
+  // every declared name instead (go to symbol, Ctrl+Shift+O), from the folder's symbol index.
   import { untrack } from "svelte";
   import { api } from "./api";
   import FileIcon from "./FileIcon.svelte";
@@ -116,5 +116,5 @@
         {#if q.startsWith("#")}{indexing ? "Indexing the folder’s symbols…" : q.length > 1 ? "No matching symbols" : "Type a function, type or class name"}{:else}No matching files{/if}
       </p>{/if}
   </div>
-  <div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+  <div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>Enter</kbd> open</span><span><kbd>esc</kbd> close</span></div>
 </div>

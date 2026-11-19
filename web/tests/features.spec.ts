@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const dir = join(import.meta.dirname, "..", ".e2e");
 const gamma = join(dir, "gamma");
-const mod = process.platform === "darwin" ? "Meta" : "Control";
+const mod = "Control"; // Falcon runs on Windows and Linux: every shortcut is Ctrl
 
 function watch(page: Page) {
   const outside: string[] = [];

@@ -69,7 +69,6 @@ var (
 		"windows": {{"go install golang.org/x/tools/gopls@latest", `%USERPROFILE%\go\bin`}},
 	})
 	clangd = installs(Server{Command: "clangd", Args: []string{"--background-index", "--header-insertion=never"}, Navigates: true}, map[string][]Install{
-		"darwin":  {{"xcode-select --install", "/usr/bin (Apple's command line tools)"}, {"brew install llvm", "/opt/homebrew/opt/llvm/bin"}},
 		"linux":   {{"sudo apt install clangd", "/usr/bin"}, {"sudo dnf install clang-tools-extra", "/usr/bin"}},
 		"windows": {{"winget install LLVM.LLVM", `C:\Program Files\LLVM\bin`}},
 	})
@@ -81,7 +80,6 @@ var (
 		"*": {{"npm install --save-dev typescript@7", npmLocal}, {"npm install -g typescript@7", npmBin}},
 	})
 	jdtls = installs(Server{Command: "jdtls", Args: []string{"-data", "{data}"}, Navigates: true, Slow: true}, map[string][]Install{
-		"darwin":  {{"brew install jdtls", "/opt/homebrew/bin (needs a recent Java in JAVA_HOME)"}},
 		"linux":   {{"brew install jdtls", "Homebrew's bin folder (needs a recent Java in JAVA_HOME)"}},
 		"windows": {{"scoop install jdtls", `%USERPROFILE%\scoop\shims (needs a recent Java in JAVA_HOME)`}},
 	})

@@ -12,7 +12,7 @@ import (
 // Finding a language server. Installers put servers in their own folders, which are often not on the
 // PATH Falcon was started with (an app launched from the Dock, a service, a shell without ~/go/bin):
 // `go install` uses Go's bin folder, rustup ~/.cargo/bin, pipx ~/.local/bin, npm its global prefix,
-// Homebrew's LLVM a folder of its own. A project can also carry its own server (node_modules/.bin, a
+// a distribution's LLVM a folder of its own. A project can also carry its own server (node_modules/.bin, a
 // virtual environment). So a server is looked for in the project first, then on PATH, then in those
 // folders, and found wherever the install command put it, without restarting Falcon.
 
@@ -70,9 +70,6 @@ func ToolDirs() []string {
 	// Python: pipx, uv tools, pip --user
 	add(join(home, ".local", "bin"))
 	switch runtime.GOOS {
-	case "darwin":
-		add(newest(join(home, "Library", "Python", "*", "bin"))...)
-		add("/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin", "/usr/local/go/bin", "/usr/bin")
 	case "windows":
 		add(join(env("APPDATA"), "npm"), join(home, "go", "bin"), join(env("ProgramFiles"), "Go", "bin"))
 		add(join(env("ProgramFiles"), "LLVM", "bin"), join(home, "scoop", "shims"), join(env("LOCALAPPDATA"), "Microsoft", "WinGet", "Links"))
@@ -165,8 +162,12 @@ type Install struct {
 }
 
 // InstallsFor are a server's install commands for an operating system, best first.
+// Falcon supports Windows and Linux; another Unix-like system is given Linux's.
 func (s Server) InstallsFor(goos string) []Install {
 	if list, ok := s.Installs[goos]; ok {
+		return list
+	}
+	if list, ok := s.Installs["linux"]; ok && goos != "windows" {
 		return list
 	}
 	return s.Installs["*"]

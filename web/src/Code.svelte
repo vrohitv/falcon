@@ -259,7 +259,7 @@
     for (let i = 1; i < parts.length; i++) await loadDirectory(parts.slice(0, i).join("/")).catch(() => {});
     open(path, at, sel);
   }
-  /** ⌘F: find in the open file (the viewer's own find; the editor keeps the browser's). */
+  /** Ctrl+F: find in the open file (the viewer's own find; the editor keeps the browser's). */
   export function find(): boolean {
     if (editing || mode !== "source" || !viewer) return false;
     return viewer.find() ?? false;
@@ -406,8 +406,8 @@
   }
 
   // Navigation history: a definition, a reference or a search result leaves the place it was made from
-  // behind; Back returns there exactly (scroll, caret, selection) and Forward comes back. On macOS ⌃- and
-  // ⌃⇧-, elsewhere Alt+← and Alt+→; the mouse's back and forward buttons too.
+  // behind; Back returns there exactly (scroll, caret, selection) and Forward comes back: Alt+← and Alt+→,
+  // or the mouse's back and forward buttons.
   type Place = { path: string; line: number; view: ViewState | null };
   let viewer = $state<ReturnType<typeof CodeViewer>>(),
     trail = $state<Place[]>([]),
@@ -443,9 +443,8 @@
     if (from) trail = [...trail, from];
     visit(next);
   }
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const backKeys = mac ? "⌃-" : "Alt+←",
-    forwardKeys = mac ? "⌃⇧-" : "Alt+→";
+  const backKeys = "Alt+←",
+    forwardKeys = "Alt+→";
   // References: the language server when there is one; otherwise every whole-word match.
   async function references() {
     const name = viewer?.wordAtCaret();
@@ -517,10 +516,10 @@
   }}
   onkeydown={(e) => {
     if (e.key === "Escape" && filesOpen) filesOpen = false;
-    // ⌘S outside the editor would open the browser's "Save page" dialog.
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && !editing) e.preventDefault();
-    const backKey = mac ? e.ctrlKey && !e.metaKey && !e.shiftKey && e.key === "-" : e.altKey && !e.shiftKey && e.key === "ArrowLeft";
-    const forwardKey = mac ? e.ctrlKey && !e.metaKey && e.shiftKey && (e.key === "_" || e.key === "-") : e.altKey && !e.shiftKey && e.key === "ArrowRight";
+    // Ctrl+S outside the editor would open the browser's "Save page" dialog.
+    if (e.ctrlKey && e.key.toLowerCase() === "s" && !editing) e.preventDefault();
+    const backKey = e.altKey && !e.shiftKey && !e.ctrlKey && e.key === "ArrowLeft";
+    const forwardKey = e.altKey && !e.shiftKey && !e.ctrlKey && e.key === "ArrowRight";
     if (backKey && trail.length) {
       e.preventDefault();
       back();
@@ -529,7 +528,7 @@
       forward();
     }
     // Edit the open file: E (when not typing), as a quick toggle.
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.shiftKey && selected && !editing) {
+    if (e.key === "Enter" && e.ctrlKey && e.shiftKey && selected && !editing) {
       e.preventDefault();
       editing = true;
     }
@@ -627,7 +626,7 @@
         {#if selected && textual && !external}<button
             class="icon-button"
             class:on={editing}
-            title={editing ? "Editing" : "Edit file (⌘⇧Enter)"}
+            title={editing ? "Editing" : "Edit file (Ctrl+Shift+Enter)"}
             aria-label="Edit file"
             onclick={() => {
               if (!editing) {
@@ -653,10 +652,10 @@
               title="Show in the explorer"
               onclick={() => void loadDirectory(crumbs.slice(0, i + 1).join("/"))}>{segment}</button
             >{:else}<span>{segment}</span>{/if}{/each}<span class="crumb-gap"></span>{#if shownAs === "code" || asSource}<button
-            title="Go to definition of the name at the caret (F12, or ⌘-click)"
+            title="Go to definition of the name at the caret (F12, or Ctrl+click)"
             onclick={() => viewer?.definitionAtCaret()}
             disabled={loading || editing}>Definition</button
-          ><button title="Find references to the name at the caret (⇧F12)" onclick={references} disabled={loading || editing}>References</button>{/if}
+          ><button title="Find references to the name at the caret (Shift+F12)" onclick={references} disabled={loading || editing}>References</button>{/if}
       </div>{/if}
     <div class="source-body">
       {#if mode === "results"}<div class="search-results" in:fade={{ duration: 120 }}>
@@ -726,10 +725,10 @@
           <p>Open a file from the explorer, or jump straight to one.</p>
           <button class="button primary mobile-only" onclick={() => (filesOpen = true)}><FolderOpen size={15} /> Browse files</button>
           <div class="keyboard-hints">
-            <span><kbd>⌘</kbd><kbd>P</kbd> Go to file</span>
-            <span><kbd>⌘</kbd><kbd>T</kbd> Go to symbol</span>
-            <span><kbd>⌘</kbd><kbd>⇧</kbd><kbd>F</kbd> Search</span>
-            <span><kbd>⌘</kbd><kbd>K</kbd> Switch folder</span>
+            <span><kbd>Ctrl</kbd><kbd>P</kbd> Go to file</span>
+            <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>O</kbd> Go to symbol</span>
+            <span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F</kbd> Search</span>
+            <span><kbd>Ctrl</kbd><kbd>K</kbd> Switch folder</span>
           </div>
         </div>{/if}
       {#if showOutline && selected}<aside class="outline" transition:slide={{ x: 24 }}>

@@ -185,7 +185,7 @@
       "[data-tree-id]",
     );
     const index = rows.findIndex((r) => r.node.id === item?.dataset.treeId);
-    if (index < 0 || event.altKey || event.metaKey || event.ctrlKey) return;
+    if (index < 0 || event.altKey || event.ctrlKey) return;
     const row = rows[index];
     let next = index;
     if (event.key === "ArrowDown") next++;
@@ -454,7 +454,6 @@
     overflow: auto;
     min-height: 0;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
   .fill .file-tree-viewport {
     flex: 1;

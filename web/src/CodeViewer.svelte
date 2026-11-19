@@ -53,7 +53,7 @@
     onjump?: (path: string, line: number, column?: number, end?: number) => void;
     onnotice?: (message: string) => void;
     disk?: { path: string; hash: string; exists: boolean; n: number } | null;
-    /** Find references to the name at the caret (⇧F12, the context menu). */
+    /** Find references to the name at the caret (Shift+F12, the context menu). */
     onreferences?: () => void;
     /** A match to select on startLine (a search result). */
     startSelect?: { col: number; len: number } | null;
@@ -253,7 +253,7 @@
     caretEl.classList.add("blink");
   }
 
-  // Find in the file (⌘F): over the whole file, not just the lines on screen. The text is fetched once
+  // Find in the file (Ctrl+F): over the whole file, not just the lines on screen. The text is fetched once
   // per version of the file; matches are highlighted where they are visible, the current one selected.
   type Match = { line: number; col: number; len: number };
   let findOpen = $state(false),
@@ -418,7 +418,7 @@
       if (k === "w") findWord = !findWord;
       if (k === "r") findRegex = !findRegex;
       void runFind();
-    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+    } else if (e.ctrlKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       findInput?.select();
     }
@@ -476,7 +476,7 @@
     if (end === start && end < text.length) end++;
     return [{ line: p.line, col: start }, { line: p.line, col: end }];
   }
-  // Word jumps (⌥← ⌥→, Ctrl elsewhere), as in VS Code: spaces are skipped, then a word or a run of
+  // Word jumps (Alt+← Alt+→, Ctrl elsewhere), as in VS Code: spaces are skipped, then a word or a run of
   // punctuation is crossed.
   function wordEdge(p: Position, dir: 1 | -1): Position {
     const text = lineText(p.line) || "";
@@ -494,9 +494,8 @@
     }
     return { line: p.line, col: i };
   }
-  // Word jumps are ⌥←/⌥→ on macOS and Ctrl+←/Ctrl+→ elsewhere (where Alt+← and Alt+→ go Back and Forward).
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const wordKey = (e: KeyboardEvent) => (mac ? e.altKey : e.ctrlKey);
+  // Word jumps: Ctrl+← and Ctrl+→ (Alt+← and Alt+→ go Back and Forward).
+  const wordKey = (e: KeyboardEvent) => e.ctrlKey;
   function lineRange(line: number): [Position, Position] {
     const total = meta?.total || 1;
     return line < total ? [{ line, col: 0 }, { line: line + 1, col: 0 }] : [{ line, col: 0 }, { line, col: (lineText(line) || "").length }];
@@ -513,11 +512,20 @@
     if (event.button !== 0) return;
     const target = event.target as Element;
     if (target.closest(".code-menu, .lsp-hover, .def-picker, .def-peek")) return;
-    // ⌘-click goes to a definition (the click handler); the browser's own selection never starts.
+    // Ctrl+click goes to a definition (the click handler); the browser's own selection never starts.
     event.preventDefault();
     viewport.focus({ preventScroll: true });
     window.getSelection()?.removeAllRanges();
-    if (event.metaKey || event.ctrlKey) return;
+    if (event.ctrlKey) {
+      // Ctrl+click goes to the definition when the button comes up where it went down (as in VS Code).
+      const at = { x: event.clientX, y: event.clientY };
+      const up = (e: MouseEvent) => {
+        window.removeEventListener("mouseup", up);
+        if (e.button === 0 && Math.abs(e.clientX - at.x) < 4 && Math.abs(e.clientY - at.y) < 4) definitionAt(e);
+      };
+      window.addEventListener("mouseup", up);
+      return;
+    }
     hoverCard = null;
     menu = null;
     picker = null;
@@ -784,8 +792,7 @@
   function focusFirst(node: HTMLElement, first: boolean) {
     if (first) node.focus();
   }
-  function click(event: MouseEvent) {
-    if (!(event.metaKey || event.ctrlKey)) return;
+  function definitionAt(event: MouseEvent) {
     const w = wordFromPoint(event.clientX, event.clientY);
     if (w) {
       event.preventDefault();
@@ -797,7 +804,7 @@
     if (event.key === "F12") {
       event.preventDefault();
       if (event.shiftKey) onreferences?.();
-      else if (event.metaKey || event.ctrlKey) lookAtCaret("textDocument/implementation");
+      else if (event.ctrlKey) lookAtCaret("textDocument/implementation");
       else definitionAtCaret();
       return;
     }
@@ -816,7 +823,7 @@
       picker = null;
       return;
     }
-    const mod = event.metaKey || event.ctrlKey;
+    const mod = event.ctrlKey;
     if (event.key === "F3" || (mod && event.key.toLowerCase() === "g")) {
       event.preventDefault();
       if (!matches.length) find();
@@ -842,7 +849,7 @@
       void copy();
       return;
     }
-    // The caret moves as in an editor: arrows, word jumps (⌥ / Ctrl), line ends, pages, file ends;
+    // The caret moves as in an editor: arrows, word jumps (Alt / Ctrl), line ends, pages, file ends;
     // with Shift each one selects.
     const page = Math.max(1, Math.floor(viewport.clientHeight / LH) - 1);
     const text = lineText(caretPos.line) || "";
@@ -868,13 +875,11 @@
         break;
       case "ArrowLeft":
         if (selected && !event.shiftKey) next = before(selected.a, selected.f) ? selected.a : selected.f;
-        else if (event.metaKey) next = { line: caretPos.line, col: 0 };
         else if (wordKey(event)) next = caretPos.col === 0 ? { line: caretPos.line - 1, col: 1e9 } : wordEdge(caretPos, -1);
         else next = caretPos.col === 0 ? { line: caretPos.line - 1, col: 1e9 } : { line: caretPos.line, col: caretPos.col - 1 };
         break;
       case "ArrowRight":
         if (selected && !event.shiftKey) next = before(selected.a, selected.f) ? selected.f : selected.a;
-        else if (event.metaKey) next = { line: caretPos.line, col: text.length };
         else if (wordKey(event)) next = caretPos.col >= text.length ? { line: caretPos.line + 1, col: 0 } : wordEdge(caretPos, 1);
         else next = caretPos.col >= text.length ? { line: caretPos.line + 1, col: 0 } : { line: caretPos.line, col: caretPos.col + 1 };
         break;
@@ -905,7 +910,7 @@
       void anchor();
     }
   }
-  // Go to definition: hold ⌘ (Ctrl elsewhere) to underline the name under
+  // Go to definition: hold Ctrl (Ctrl elsewhere) to underline the name under
   // the pointer and preview where it is defined; click, or press F12 on the
   // caret's name, to go there. Several answers open a picker.
   let linking = $state(false),
@@ -955,7 +960,7 @@
     peek = null;
   }
   function hover(event: MouseEvent) {
-    linking = event.metaKey || event.ctrlKey;
+    linking = event.ctrlKey;
     if (!linking) {
       unhover();
       return info(event);
@@ -1137,6 +1142,8 @@
   // The context menu: the editor's "Go to…" actions for the name under the pointer.
   let menu = $state<{ x: number; y: number; word: string } | null>(null);
   function contextMenu(event: MouseEvent) {
+    // Some systems turn Ctrl+click into a context-menu click; that one is a definition jump instead.
+    if (event.ctrlKey && event.button === 0) return event.preventDefault();
     const w = wordFromPoint(event.clientX, event.clientY);
     if (!w) return;
     event.preventDefault();
@@ -1188,7 +1195,7 @@
     const resize = new ResizeObserver(schedule);
     resize.observe(viewport);
     const modifier = (e: KeyboardEvent) => {
-      if (e.key === "Meta" || e.key === "Control") {
+      if (e.key === "Control") {
         linking = e.type === "keydown";
         if (!linking) unhover();
       }
@@ -1263,13 +1270,13 @@
         }}
         onkeydown={findKey}
       />
-      <button class="find-toggle" class:on={findCase} aria-pressed={findCase} title="Match case (⌥C)" aria-label="Match case" onclick={() => ((findCase = !findCase), void runFind())}><CaseSensitive size={15} /></button>
-      <button class="find-toggle" class:on={findWord} aria-pressed={findWord} title="Whole word (⌥W)" aria-label="Whole word" onclick={() => ((findWord = !findWord), void runFind())}><WholeWord size={15} /></button>
-      <button class="find-toggle" class:on={findRegex} aria-pressed={findRegex} title="Regular expression (⌥R)" aria-label="Regular expression" onclick={() => ((findRegex = !findRegex), void runFind())}><Regex size={15} /></button>
+      <button class="find-toggle" class:on={findCase} aria-pressed={findCase} title="Match case (Alt+C)" aria-label="Match case" onclick={() => ((findCase = !findCase), void runFind())}><CaseSensitive size={15} /></button>
+      <button class="find-toggle" class:on={findWord} aria-pressed={findWord} title="Whole word (Alt+W)" aria-label="Whole word" onclick={() => ((findWord = !findWord), void runFind())}><WholeWord size={15} /></button>
+      <button class="find-toggle" class:on={findRegex} aria-pressed={findRegex} title="Regular expression (Alt+R)" aria-label="Regular expression" onclick={() => ((findRegex = !findRegex), void runFind())}><Regex size={15} /></button>
       <span class="find-count" class:bad={!!findError || (findQuery && !matches.length)} aria-live="polite"
         >{findError || (!findQuery ? "" : matches.length ? `${(findIndex + 1).toLocaleString()} of ${matches.length >= 20000 ? "20,000+" : matches.length.toLocaleString()}` : "No results")}</span
       >
-      <button class="icon-button" title="Previous match (⇧Enter)" aria-label="Previous match" disabled={!matches.length} onclick={() => step(-1)}><ArrowUp size={14} /></button>
+      <button class="icon-button" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled={!matches.length} onclick={() => step(-1)}><ArrowUp size={14} /></button>
       <button class="icon-button" title="Next match (Enter)" aria-label="Next match" disabled={!matches.length} onclick={() => step(1)}><ArrowDown size={14} /></button>
       <button class="icon-button" title="Close (Esc)" aria-label="Close find" onclick={closeFind}><X size={14} /></button>
     </div>{/if}
@@ -1285,7 +1292,6 @@
       schedule();
     }}
     onmousedown={pointerDown}
-    onclick={click}
     oncopy={(e) => {
       e.preventDefault();
       void copy();
@@ -1334,9 +1340,9 @@
       <div class="def-picker-head"><b>{menu.word}</b></div>
       <button role="menuitem" use:focusFirst={true} onclick={() => act(definitionAtCaret)}><span>Go to definition</span><kbd>F12</kbd></button>
       <button role="menuitem" onclick={() => act(() => lookAtCaret("textDocument/typeDefinition"))}><span>Go to type definition</span></button>
-      <button role="menuitem" onclick={() => act(() => lookAtCaret("textDocument/implementation"))}><span>Go to implementations</span><kbd>⌘F12</kbd></button>
-      <button role="menuitem" onclick={() => act(() => onreferences?.())}><span>Find all references</span><kbd>⇧F12</kbd></button>
-      <button role="menuitem" onclick={() => act(() => void anchor())}><span>Copy path and line</span><kbd>⌥E</kbd></button>
+      <button role="menuitem" onclick={() => act(() => lookAtCaret("textDocument/implementation"))}><span>Go to implementations</span><kbd>Ctrl+F12</kbd></button>
+      <button role="menuitem" onclick={() => act(() => onreferences?.())}><span>Find all references</span><kbd>Shift+F12</kbd></button>
+      <button role="menuitem" onclick={() => act(() => void anchor())}><span>Copy path and line</span><kbd>Alt+E</kbd></button>
     </div>{/if}
   {#if problemList}<div class="def-picker problem-list" role="listbox" tabindex="-1" style:right="16px" style:bottom="44px" in:fly={{ y: 4, duration: 120 }}>
       <div class="def-picker-head">{problems.length} problem{problems.length === 1 ? "" : "s"} in this file{checking ? " · checking…" : ""}</div>
@@ -1372,16 +1378,16 @@
       class:foot-problem={here.length}
       data-severity={here[0]?.severity}
       title={here.map((d) => d.message).join("\n")}
-      >{finding ? "Looking it up…" : here.length ? here[0].message : "⌘-click a name to go to its definition · right-click for more"}</span
+      >{finding ? "Looking it up…" : here.length ? here[0].message : "Ctrl+click a name to go to its definition · right-click for more"}</span
     >{#if problems.length || checking}<button
         class="problem-count"
         title="Problems in this file (F8 goes to the next)"
         aria-expanded={problemList}
         onclick={() => (problemList = !problemList)}
         ><i class="sev-dot" data-severity="error"></i>{counts.error}<i class="sev-dot" data-severity="warning"></i>{counts.warning}{#if counts.other}<i class="sev-dot" data-severity="information"></i>{counts.other}{/if}</button
-      >{/if}<LspStatus {path} /><button onclick={copy} title="Copy the selection or the current line (⌘C)"><Copy size={12} />Copy</button><button
+      >{/if}<LspStatus {path} /><button onclick={copy} title="Copy the selection or the current line (Ctrl+C)"><Copy size={12} />Copy</button><button
       onclick={anchor}
-      title="Copy path:line (⌥E)">{path.split("/").at(-1)}:{current}</button
+      title="Copy path:line (Alt+E)">{path.split("/").at(-1)}:{current}</button
     >
   </div>
 </div>

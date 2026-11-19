@@ -124,16 +124,29 @@ pre {
 svg {
   flex-shrink: 0;
 }
+/* Scrollbars as in VS Code: square-edged thumbs on a transparent track, darker while hovered or
+   dragged. (An element that sets the standard scrollbar-width or scrollbar-color loses these in Chromium,
+   so none does, except where a scrollbar is hidden on purpose.) */
 ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 4px;
+  background: var(--scroll-thumb);
+  border-radius: 0;
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--scroll-thumb-active);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
 }
 ::selection {
   background: var(--selection);

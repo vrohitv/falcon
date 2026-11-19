@@ -664,11 +664,11 @@
               id="git-commit-message"
               bind:value={message}
               oninput={saveDraft}
-              placeholder={merging && repoState?.merge_message ? repoState.merge_message : amend ? "Message for the amended commit" : "Commit message (⌘Enter to commit)"}
+              placeholder={merging && repoState?.merge_message ? repoState.merge_message : amend ? "Message for the amended commit" : "Commit message (Ctrl+Enter to commit)"}
               onkeydown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if (e.ctrlKey && e.key === "Enter") {
                   e.preventDefault();
-                  // ⌘⇧Enter: commit and push.
+                  // Ctrl+Shift+Enter: commit and push.
                   if (e.shiftKey && canPush) commit("push");
                   else (e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
                 }
@@ -712,7 +712,7 @@
                       ><ChevronDown size={14} /></button
                     >{#if commitMenu}<div class="git-menu" role="menu">
                         <button type="button" role="menuitem" onclick={() => commit("push")}
-                          >{repoState?.upstream ? "Commit & Push" : "Commit & Publish branch"}<kbd>⌘⇧↵</kbd></button
+                          >{repoState?.upstream ? "Commit & Push" : "Commit & Publish branch"}<kbd>Ctrl+Shift+Enter</kbd></button
                         >
                         <button type="button" role="menuitem" disabled={!repoState?.upstream} onclick={() => commit("sync")}>Commit & Sync</button>
                       </div>{/if}</span

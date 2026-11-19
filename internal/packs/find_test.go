@@ -90,7 +90,7 @@ func TestLookFindsProjectAndInstallerFolders(t *testing.T) {
 func TestEveryServerHasInstallCommandsForEverySystem(t *testing.T) {
 	for _, p := range Packs {
 		for _, s := range p.Servers {
-			for _, goos := range []string{"darwin", "linux", "windows"} {
+			for _, goos := range []string{"linux", "windows"} {
 				list := s.InstallsFor(goos)
 				if len(list) == 0 {
 					t.Errorf("%s has no install command for %s", s.Command, goos)

@@ -5,7 +5,7 @@ import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = join(import.meta.dirname, "..", ".e2e");
-const mod = process.platform === "darwin" ? "Meta" : "Control";
+const mod = "Control"; // Falcon runs on Windows and Linux: every shortcut is Ctrl
 // big.py: 20,000 functions of three lines each.
 const big = Array.from({ length: 20000 }, (_, i) => `def function_${i}():\n    return ${i}\n`).join("\n") + "\n";
 const bigLines = big.split("\n");
@@ -77,16 +77,16 @@ test("selection is Falcon's own: drag, drag past the edge, word, line, Shift, ke
   await page.keyboard.up("Shift");
   expect(await copied(page)).toBe(bigLines.slice(4, 6).join("\n") + "\n");
 
-  // Keys: Escape clears; Shift+↓ selects lines; ⌥⇧→ a word.
+  // Keys: Escape clears; Shift+↓ selects lines; Ctrl+Shift+→ a word.
   await page.keyboard.press("Escape");
   await page.mouse.click(a.x + 1, a.y + 11);
   await page.keyboard.press("Shift+ArrowDown");
   await page.keyboard.press("Shift+ArrowDown");
   expect(await copied(page)).toBe(bigLines.slice(4, 6).join("\n") + "\n");
   await page.mouse.click(a.x + 1, a.y + 11);
-  await page.keyboard.press("Alt+Shift+ArrowRight");
+  await page.keyboard.press("Control+Shift+ArrowRight");
   expect(await copied(page)).toBe("    return"); // spaces skipped, then the word, as in VS Code
-  await page.keyboard.press("Alt+Shift+ArrowRight");
+  await page.keyboard.press("Control+Shift+ArrowRight");
   expect(await copied(page)).toBe("    return 1");
 
   // Select all copies the whole 60,000-line file.

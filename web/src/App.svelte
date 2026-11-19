@@ -250,7 +250,7 @@
 
 <svelte:window
   onkeydown={(e) => {
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = e.ctrlKey;
     const k = e.key.toLowerCase();
     if (mod && k === "k") {
       e.preventDefault();
@@ -261,7 +261,8 @@
       foldersOpen = false;
       quickStart = "";
       quickOpen = !quickOpen;
-    } else if (mod && !e.shiftKey && k === "t" && repo) {
+    } else if (((mod && !e.shiftKey && k === "t") || (mod && e.shiftKey && k === "o")) && repo) {
+      // Go to symbol: Ctrl+Shift+O (browsers keep Ctrl+T for a new tab; it works where they pass it on).
       e.preventDefault();
       foldersOpen = false;
       quickStart = "#";
@@ -300,12 +301,12 @@
 {:else}
   <div class="falcon" class:git-view={view === "git"}>
     <nav class="activity" aria-label="Views">
-      <button class="activity-mark" title="All folders (⌘K)" aria-label="All folders" onclick={() => (foldersOpen = true)}><Mark size={24} mode={working ? "working" : arrived ? "idle" : "intro"} label="Falcon" /></button>
+      <button class="activity-mark" title="All folders (Ctrl+K)" aria-label="All folders" onclick={() => (foldersOpen = true)}><Mark size={24} mode={working ? "working" : arrived ? "idle" : "intro"} label="Falcon" /></button>
       {#if repo}
-        <button class:active={view === "code" && side === "explorer"} title="Explorer (⌘⇧E)" aria-label="Explorer" onclick={() => showSide("explorer")}><Files size={20} /></button>
-        <button title="Go to file (⌘P)" aria-label="Go to file" onclick={() => ((quickStart = ""), (quickOpen = true))}><FileSearch size={20} /></button>
-        <button class:active={view === "code" && side === "search"} title="Search (⌘⇧F)" aria-label="Search" onclick={() => showSide("search")}><Search size={20} /></button>
-        <button class:active={view === "git"} title="Source Control (⌃⇧G)" aria-label="Source Control" onclick={() => (view = view === "git" ? "code" : "git")}
+        <button class:active={view === "code" && side === "explorer"} title="Explorer (Ctrl+Shift+E)" aria-label="Explorer" onclick={() => showSide("explorer")}><Files size={20} /></button>
+        <button title="Go to file (Ctrl+P)" aria-label="Go to file" onclick={() => ((quickStart = ""), (quickOpen = true))}><FileSearch size={20} /></button>
+        <button class:active={view === "code" && side === "search"} title="Search (Ctrl+Shift+F)" aria-label="Search" onclick={() => showSide("search")}><Search size={20} /></button>
+        <button class:active={view === "git"} title="Source Control (Ctrl+Shift+G)" aria-label="Source Control" onclick={() => (view = view === "git" ? "code" : "git")}
           ><GitBranch size={20} />{#if summary?.changes}<span class="activity-badge" in:fly={{ y: -3, duration: 160 }}>{summary.changes > 99 ? "99+" : summary.changes}</span>{/if}</button
         >
       {/if}
@@ -357,7 +358,7 @@
           {#if repos.length}<div class="welcome-list">
               {#each repos as r, i (r.id)}<a class="welcome-folder" href={`/r/${encodeURIComponent(r.id)}/`} in:fly={{ y: 10, delay: 80 + i * 40, duration: 320 }}
                   onclick={(e) => {
-                    if (e.metaKey || e.ctrlKey || e.button === 1) return;
+                    if (e.ctrlKey || e.button === 1) return;
                     e.preventDefault();
                     void enter(r.id);
                   }}
@@ -369,7 +370,7 @@
         </div>{/if}
     </main>
     <footer class="statusbar">
-      {#if repo}<button class="status-item status-folder" onclick={() => (foldersOpen = true)} title={`${home(repo.path)}: switch folder (⌘K)`} aria-label="Switch folder"
+      {#if repo}<button class="status-item status-folder" onclick={() => (foldersOpen = true)} title={`${home(repo.path)}: switch folder (Ctrl+K)`} aria-label="Switch folder"
           ><FolderGit2 size={12} /><strong>{repo.name}</strong><ChevronsUpDown size={11} /></button
         ><button class="status-item mobile-only" onclick={() => ((quickStart = ""), (quickOpen = true))} aria-label="Go to file"><FileSearch size={12} /></button
         >{#if summary?.branch}<button class="status-item" onclick={() => (view = "git")} title="Source Control"

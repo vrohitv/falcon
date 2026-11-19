@@ -26,14 +26,14 @@
   const name = $derived(current.server?.server);
   const title = $derived(
     {
-      ready: `${name} is ready: ⌘-click asks it first, then falls back to syntax matches` +
+      ready: `${name} is ready: Ctrl+click asks it first, then falls back to syntax matches` +
         (current.server?.note ? ` (${current.server.note})` : ""),
       starting: `${name} is starting and answering…`,
       indexing: `${name} is reading the project${current.server?.note ? ` (${current.server.note})` : ""}; lookups wait for it`,
-      failed: `${name} failed: ${current.server?.note || "unknown error"}. ⌘-click uses syntax matches`,
-      off: `Language servers are turned off (Falcon was started with -lsp=false); ⌘-click uses syntax matches`,
-      missing: `${name} is not installed (open this menu for how); ⌘-click uses syntax matches`,
-      none: "No language server for this file type; ⌘-click uses syntax matches",
+      failed: `${name} failed: ${current.server?.note || "unknown error"}. Ctrl+click uses syntax matches`,
+      off: `Language servers are turned off (Falcon was started with -lsp=false); Ctrl+click uses syntax matches`,
+      missing: `${name} is not installed (open this menu for how); Ctrl+click uses syntax matches`,
+      none: "No language server for this file type; Ctrl+click uses syntax matches",
     }[current.state],
   );
   function rowState(s: (typeof lsp.status & {})["servers"][number]) {
@@ -132,7 +132,7 @@
         {#if !status.execution}Language servers are off (Falcon was started with <code>-lsp=false</code>).{:else}After installing, press
           Check again: Falcon looks in the project's own <code>node_modules/.bin</code> and <code>.venv</code>, your PATH, and the
           folders installers use, so no restart is needed. Servers start on demand, one per project, and stop after 20 idle minutes.{/if}
-        Without one, ⌘-click uses syntax matches.
+        Without one, Ctrl+click uses syntax matches.
       </p>
     </div>{/if}
 </span>
