@@ -41,6 +41,7 @@ func run() error {
 	useLSP := flag.Bool("lsp", true, "run installed language servers for definitions, references, hover and problems")
 	version := flag.Bool("version", false, "print the version and exit")
 	openBrowser := flag.Bool("open", false, "open Falcon in the default browser")
+	terminal := flag.Bool("terminal", true, "allow terminals (a shell in each folder); beyond loopback it must be given explicitly")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: falcon [flags] [folder ...]\n\nServes the given Git repositories (and any added before) at http://%s\n\nFlags:\n", "127.0.0.1:7700")
 		flag.PrintDefaults()
@@ -78,6 +79,13 @@ func run() error {
 	}
 	s := server.New(ws, token, *assets, *data)
 	s.NoLSP = !*useLSP
+	// A terminal is a shell as the owner. On this machine that is what an editor gives anyway; served to a
+	// network (with a token) it is offered only when asked for by name.
+	explicit := false
+	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "terminal" })
+	ip := net.ParseIP(host)
+	loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+	s.Terminal = *terminal && (loopback || explicit)
 	defer s.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

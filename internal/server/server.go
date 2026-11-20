@@ -23,6 +23,7 @@ import (
 	"github.com/vrohitv/falcon/internal/domain"
 	"github.com/vrohitv/falcon/internal/index"
 	"github.com/vrohitv/falcon/internal/lsp"
+	"github.com/vrohitv/falcon/internal/term"
 	"github.com/vrohitv/falcon/internal/workspace"
 	webassets "github.com/vrohitv/falcon/web"
 )
@@ -37,7 +38,11 @@ type Server struct {
 	// Data is where Falcon keeps its own state (jdtls's index, the folder list).
 	Data string
 	// NoLSP turns language servers off.
-	NoLSP     bool
+	NoLSP bool
+	// Terminal allows terminals (a shell in the folder, as the owner). On by default on loopback; served
+	// beyond this machine it must be asked for (-terminal), since the token then gives a shell.
+	Terminal  bool
+	terms     *term.Manager
 	Handler   http.Handler
 	watcher   fileWatcher
 	lsps      *lsp.Pool
@@ -100,6 +105,7 @@ func (s *Server) sweepIndexes() {
 // forget drops everything kept for a folder that is no longer served: its index (and the copy on disk),
 // its last search, its language servers.
 func (s *Server) forget(rp *workspace.Repo) {
+	s.terms.CloseFolder(rp.Repo.Path)
 	s.idxMu.Lock()
 	if x := s.indexes[rp.ID]; x != nil {
 		x.Close()
@@ -122,7 +128,7 @@ var Version = "0.1.0"
 
 // New builds the server and its routes.
 func New(ws *workspace.Workspace, token, assets, data string) *Server {
-	s := &Server{Workspace: ws, Token: token, Assets: assets, Data: data, lsps: lsp.NewPool(20 * time.Minute)}
+	s := &Server{Workspace: ws, Token: token, Assets: assets, Data: data, lsps: lsp.NewPool(20 * time.Minute), terms: term.NewManager()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /api/login", s.login)
@@ -158,6 +164,8 @@ func New(ws *workspace.Workspace, token, assets, data string) *Server {
 		"GET git/diff":         s.gitDiff,
 		"POST git/commands":    s.gitCommand,
 		"GET git/events":       s.gitEvents,
+		"GET ws":               s.socket,
+		"GET terminals":        s.terminals,
 	}
 	for route, h := range repo {
 		method, rest, _ := strings.Cut(route, " ")
@@ -253,7 +261,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-			if acceptsGzip(r) && !strings.HasSuffix(r.URL.Path, "/events") && !strings.HasSuffix(r.URL.Path, "/watch") {
+			if acceptsGzip(r) && !strings.HasSuffix(r.URL.Path, "/events") && !strings.HasSuffix(r.URL.Path, "/watch") && !strings.HasSuffix(r.URL.Path, "/ws") {
 				w = &gzipJSON{ResponseWriter: w}
 			}
 			if r.URL.Path != "/api/login" && s.Token != "" {
@@ -365,4 +373,7 @@ func Run(ctx context.Context, address string, handler http.Handler) error {
 }
 
 // Close stops the language servers.
-func (s *Server) Close() { s.lsps.Close() }
+func (s *Server) Close() {
+	s.lsps.Close()
+	s.terms.Close()
+}
