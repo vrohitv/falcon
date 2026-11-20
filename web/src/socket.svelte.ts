@@ -92,6 +92,36 @@ export function sendInput(id: string, text: string) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(frame);
 }
 
+/** Raw bytes for a terminal session (mouse reports and other binary input). */
+export function sendBytes(id: string, body: Uint8Array) {
+  const idBytes = encoder.encode(id);
+  const frame = new Uint8Array(1 + idBytes.length + body.length);
+  frame[0] = idBytes.length;
+  frame.set(idBytes, 1);
+  frame.set(body, 1 + idBytes.length);
+  if (ws?.readyState === WebSocket.OPEN) ws.send(frame);
+}
+
+/** Opens a terminal session: resolves with it (or fails with the server's reason). */
+export function openTerminal(cols: number, rows: number): Promise<{ id: string; title: string; shell: string }> {
+  const req = Math.random().toString(36).slice(2);
+  return new Promise((resolve, reject) => {
+    const offOk = on("term.opened", (m) => {
+      if (m.req !== req) return;
+      offOk();
+      offErr();
+      resolve(m.session);
+    });
+    const offErr = on("error", (m) => {
+      if (m.req !== req) return;
+      offOk();
+      offErr();
+      reject(new Error(m.message));
+    });
+    send({ t: "term.open", req, cols, rows });
+  });
+}
+
 /** Listens for one type of message; returns the way to stop. */
 export function on(type: string, f: Listener) {
   let set = listeners.get(type);

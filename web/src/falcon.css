@@ -119,6 +119,19 @@ body.resizing * {
   position: absolute;
   inset: 0;
 }
+/* The views above, the terminal panel below. */
+.stage-view {
+  display: flex;
+  flex-direction: column;
+}
+.stage-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.status-item.on {
+  color: var(--bright);
+}
 .view-pane {
   display: flex;
   flex-direction: column;

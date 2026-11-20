@@ -59,10 +59,12 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request, rp *workspace.Re
 	ctx, cancel := context.WithCancel(context.Background())
 	conn := &wsConn{s: s, rp: rp, c: c, ctx: ctx, cancel: cancel, views: map[string]*term.Viewer{}}
 	defer conn.close()
-	conn.send(map[string]any{"t": "hello", "terminal": s.Terminal})
 
-	// Git changes.
+	// Git changes. The watch (and its first look at the working tree) starts before "hello": the page
+	// refreshes on hello, so a change made before the first look is in that refresh, and one made after
+	// it is an event. Nothing falls between.
 	gw, ch, err := s.watchGit(rp)
+	conn.send(map[string]any{"t": "hello", "terminal": s.Terminal})
 	if err == nil {
 		conn.wg.Add(1)
 		go func() {

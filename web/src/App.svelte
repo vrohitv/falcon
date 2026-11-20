@@ -1,7 +1,7 @@
 <script lang="ts">
   // Falcon's shell. One server serves many folders; this tab is on one of them, named in the URL
   // (/r/<id>/#path:line), so another tab can be on another folder, and a link opens the same file.
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { api, apiURL, setRepo, APIError, type Repo } from "./api";
   import { connect, disconnect, on } from "./socket.svelte";
   import { resetCaches } from "./filecache";
@@ -18,7 +18,7 @@
   import type { GitState } from "./git";
   import { confirmDialog } from "./confirm.svelte";
   import { fade, fly } from "./motion";
-  import { Files, Search, FileSearch, GitBranch, FolderGit2, ChevronsUpDown, Plus, Sun, Moon, SunMoon } from "@lucide/svelte";
+  import { Files, Search, FileSearch, GitBranch, FolderGit2, ChevronsUpDown, Plus, Sun, Moon, SunMoon, SquareTerminal } from "@lucide/svelte";
 
   let repos = $state<Repo[]>([]),
     repo = $state<Repo | null>(null),
@@ -41,6 +41,51 @@
     summary = $state<{ branch: string; head: string; changes: number } | null>(null),
     location = $state({ path: "", line: 0 });
   let code = $state<ReturnType<typeof Code>>();
+  // The terminal panel: loaded the first time it opens (xterm.js stays out of the editor's way), open or
+  // hidden per folder, its height remembered.
+  let Panel = $state<any>(null),
+    panel = $state<any>(),
+    terminalOpen = $state(false),
+    terminalMax = $state(false),
+    terminalHeight = $state(280);
+  try {
+    terminalHeight = Number(localStorage.getItem("falcon.terminal.height")) || 280;
+  } catch {}
+  $effect(() => {
+    try {
+      localStorage.setItem("falcon.terminal.height", String(terminalHeight));
+    } catch {}
+  });
+  $effect(() => {
+    if (!repo) return;
+    const key = "falcon.terminal.open:" + repo.id;
+    untrack(() => {
+      try {
+        if (localStorage.getItem(key) === "1") void showTerminal(false);
+      } catch {}
+    });
+  });
+  $effect(() => {
+    if (!repo) return;
+    try {
+      localStorage.setItem("falcon.terminal.open:" + repo.id, terminalOpen ? "1" : "0");
+    } catch {}
+  });
+  async function showTerminal(focus = true) {
+    Panel ??= (await import("./TerminalPanel.svelte")).default;
+    terminalOpen = true;
+    if (focus) {
+      await tick();
+      requestAnimationFrame(() => panel?.focus());
+    }
+  }
+  async function newTerminal() {
+    const wasOpen = terminalOpen && panel;
+    await showTerminal(false);
+    await tick();
+    // A panel just opened makes its first terminal itself.
+    if (wasOpen) await panel?.create(false);
+  }
   // The mark works (wingbeats) while a request has taken more than a moment; quick ones do not flicker it.
   let working = $state(false),
     arrived = $state(false);
@@ -185,7 +230,15 @@
     if (!repo) return;
     // Git changes arrive on the page's one connection (see socket.svelte.ts).
     connect(repo.id);
-    return on("git", (m) => {
+    // On (re)connecting, look again: changes made while the page loaded or was disconnected are not
+    // events (the server's watch began after them).
+    const offHello = on("hello", () => {
+      gitPulse++;
+      if (view === "code") codePulse++;
+      else codeStale = true;
+      void refreshSummary();
+    });
+    const offGit = on("git", (m) => {
       const n = Number(m.n);
       // A change this tab's own action made was already answered with the new state; the answer may
       // still be on its way, so the event waits a moment before it counts.
@@ -198,6 +251,10 @@
         void refreshSummary();
       }, 200);
     });
+    return () => {
+      offHello();
+      offGit();
+    };
   });
 
   async function login(e: SubmitEvent) {
@@ -253,6 +310,14 @@
 <svelte:window
   onkeydown={(e) => {
     const mod = e.ctrlKey;
+    // Ctrl+` shows or hides the terminal panel (focusing it); Ctrl+Shift+` opens a new terminal.
+    if (mod && !e.altKey && (e.key === "`" || e.key === "~" || e.code === "Backquote") && repo) {
+      e.preventDefault();
+      if (e.shiftKey) void newTerminal();
+      else if (terminalOpen) terminalOpen = false;
+      else void showTerminal();
+      return;
+    }
     const k = e.key.toLowerCase();
     if (mod && k === "k") {
       e.preventDefault();
@@ -324,6 +389,7 @@
     <main class="stage">
       {#if !loaded}<div class="loading-screen" out:fade={{ duration: 120 }}><Mark size={56} mode="working" label="Loading Falcon" /></div>
       {:else if repo}{#key repo.id}<div class="stage-view" in:fade={{ duration: 160 }}>
+            <div class="stage-main">
             <div class="view-pane" class:hidden={view !== "code"}>
               <Code
                 bind:this={code}
@@ -350,6 +416,21 @@
                   }}
                 />
               </div>{/if}
+            </div>
+            {#if terminalOpen && Panel}<Panel
+                bind:this={panel}
+                bind:height={terminalHeight}
+                bind:maximized={terminalMax}
+                repoID={repo.id}
+                folder={repo.path}
+                onopenfile={async (path: string, line: number, col: number) => {
+                  view = "code";
+                  await tick();
+                  code?.openFile(path, line, col, 0);
+                }}
+                onhide={() => (terminalOpen = false)}
+                onerror={notify}
+              />{/if}
           </div>{/key}
       {:else}<div class="welcome" in:fade={{ duration: 200 }}>
           <div class="welcome-head" in:fly={{ y: 10, duration: 400 }}>
@@ -375,6 +456,7 @@
       {#if repo}<button class="status-item status-folder" onclick={() => (foldersOpen = true)} title={`${home(repo.path)}: switch folder (Ctrl+K)`} aria-label="Switch folder"
           ><FolderGit2 size={12} /><strong>{repo.name}</strong><ChevronsUpDown size={11} /></button
         ><button class="status-item mobile-only" onclick={() => ((quickStart = ""), (quickOpen = true))} aria-label="Go to file"><FileSearch size={12} /></button
+        ><button class="status-item" class:on={terminalOpen} onclick={() => (terminalOpen ? (terminalOpen = false) : void showTerminal())} title="Terminal (Ctrl+`)" aria-label="Terminal"><SquareTerminal size={12} /><span class="wide-only">Terminal</span></button
         >{#if summary?.branch}<button class="status-item" onclick={() => (view = "git")} title="Source Control"
             ><GitBranch size={12} />{summary.branch}{#if summary.changes}<span class="status-changes">· {summary.changes} changed</span>{/if}</button
           >{/if}{#if location.path}<span class="status-item subtle wide-only">{location.path}{location.line ? ":" + location.line : ""}</span>{/if}{/if}

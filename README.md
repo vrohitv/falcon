@@ -20,6 +20,10 @@ falcon ~/code/app ~/code/api      # then open http://127.0.0.1:7700
   tabs dragged to reorder, into another group, or onto a group's edge to split it; drag the lines between
   groups to resize; Ctrl+1 … Ctrl+4 focus a group. The tab menu closes others, those to the right, or all.
   The layout and every group's tabs come back next time.
+- A terminal panel as in VS Code (Ctrl+\`): your shell in the folder, as tabs and side-by-side splits,
+  drawn by the GPU; Ctrl+click a `path:line` in its output to open it. Terminals run on the server:
+  hide the panel or reload the page and they are still there, with their output. A program printing a
+  lot is paused rather than flooding the page (output is acknowledged as it is drawn).
 - A small minimap beside the code shows the file's shape (no text, so it costs nothing), the visible
   region, problems and find matches; click or drag it to scroll.
 - Ctrl+click or F12 goes to a definition, with the name selected there; Shift+F12 lists references
@@ -120,6 +124,7 @@ falcon -open ~/code/app ~/code/api      # serves both; opens the browser
 | `-data` | your config folder `/falcon` | The folder list and language-server indexes. |
 | `-lsp` | `true` | Run installed language servers. |
 | `-open` | `false` | Open Falcon in your browser once it is listening. |
+| `-terminal` | `true` | Allow terminals (a shell in each folder, as you). Served beyond this machine, terminals need `-terminal` given explicitly, since the token then gives a shell. |
 | `-assets` | built in | Serve the UI from a folder (development). |
 
 Without arguments Falcon serves the folders it served last time, or the current folder.
@@ -142,6 +147,7 @@ Falcon runs on Windows and Linux; every shortcut uses Ctrl and Alt.
 | F8 | Next problem |
 | Ctrl+\\ / Ctrl+Shift+\\ | Split the editor right / down |
 | Ctrl+1 … Ctrl+4 | Focus an editor group |
+| Ctrl+\` / Ctrl+Shift+\` | Show or hide the terminal / a new terminal (Ctrl+F finds in its output) |
 | Ctrl+K | Switch folder |
 | Ctrl+Shift+E / Ctrl+B | Explorer / toggle the sidebar |
 | Ctrl+Shift+G | Source Control |

@@ -368,6 +368,8 @@ func (s *Server) watchGit(rp *workspace.Repo) (*gitWatch, chan int, error) {
 			}
 		}()
 		s.git.watch[rp.ID] = gw
+		// The first look at the working tree is taken now, before anyone is told the watch exists.
+		gw.rebase(treePrint(rp))
 		go s.watchTree(rp, gw)
 	}
 	ch := make(chan int, 1)
@@ -405,10 +407,8 @@ func (s *Server) watchTree(rp *workspace.Repo, gw *gitWatch) {
 	// repository (or a slow disk, or Windows with an antivirus) never spends more than a fifth of its
 	// time being watched.
 	pause := func(took time.Duration) time.Duration { return max(1500*time.Millisecond, 4*took) }
-	// The baseline is taken at once, so a change made right after a page connects is still reported.
-	started := time.Now()
-	gw.rebase(treePrint(rp))
-	wait := pause(time.Since(started))
+	// The baseline was taken by watchGit, before the watch was handed out.
+	wait := pause(0)
 	for {
 		time.Sleep(wait)
 		// Under the workspace lock, so a subscriber arriving now gets a fresh watch instead of this one.
