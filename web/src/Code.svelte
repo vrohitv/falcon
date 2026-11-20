@@ -5,7 +5,8 @@
   // Ctrl+1 … Ctrl+4 focus a group. The layout is remembered per folder.
   import { onMount, tick, untrack } from "svelte";
   import { cachedDirectory, observe, prefetch, rememberDirectory } from "./filecache";
-  import { api, apiURL } from "./api";
+  import { api } from "./api";
+  import { on, watch } from "./socket.svelte";
   import type { FileEntry } from "./api";
   import type { ViewState } from "./CodeViewer.svelte";
   import EditorGroup, { type GroupState, type DropTarget } from "./EditorGroup.svelte";
@@ -202,22 +203,11 @@
     observe(e.path, e.hash, e.exists);
     disk = { ...e, n: ++events };
   }
+  // The open files' changes arrive on the page's one connection (see socket.svelte.ts).
+  $effect(() => on("file", (m) => deliver({ path: m.path, hash: m.hash, exists: m.exists })));
+  $effect(() => on("watch.unavailable", () => (watching = false)));
   $effect(() => {
-    const open = openPaths;
-    if (!open.length || !watching) return;
-    let opened = false;
-    const source = new EventSource(apiURL("/api/files/watch?" + open.map((p) => "path=" + encodeURIComponent(p)).join("&")));
-    source.addEventListener("file", (event) => {
-      opened = true;
-      deliver(JSON.parse((event as MessageEvent).data));
-    });
-    source.onerror = () => {
-      if (!opened) {
-        source.close();
-        watching = false;
-      }
-    };
-    return () => source.close();
+    if (watching) watch(openPaths);
   });
   async function check(path: string) {
     if (watching || !path) return;

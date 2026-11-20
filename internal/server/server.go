@@ -150,7 +150,6 @@ func New(ws *workspace.Workspace, token, assets, data string) *Server {
 		"PUT file":             s.saveFile,
 		"GET file/stat":        s.fileStat,
 		"GET raw":              s.raw,
-		"GET files/watch":      s.watchFiles,
 		"GET search":           s.search,
 		"GET summary":          s.summary,
 		"GET languages":        s.languages,
@@ -163,7 +162,6 @@ func New(ws *workspace.Workspace, token, assets, data string) *Server {
 		"GET git/commit":       s.gitCommit,
 		"GET git/diff":         s.gitDiff,
 		"POST git/commands":    s.gitCommand,
-		"GET git/events":       s.gitEvents,
 		"GET ws":               s.socket,
 		"GET terminals":        s.terminals,
 	}
@@ -261,7 +259,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-			if acceptsGzip(r) && !strings.HasSuffix(r.URL.Path, "/events") && !strings.HasSuffix(r.URL.Path, "/watch") && !strings.HasSuffix(r.URL.Path, "/ws") {
+			if acceptsGzip(r) && !strings.HasSuffix(r.URL.Path, "/ws") {
 				w = &gzipJSON{ResponseWriter: w}
 			}
 			if r.URL.Path != "/api/login" && s.Token != "" {

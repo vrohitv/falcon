@@ -3,6 +3,7 @@
   // (/r/<id>/#path:line), so another tab can be on another folder, and a link opens the same file.
   import { onMount, tick } from "svelte";
   import { api, apiURL, setRepo, APIError, type Repo } from "./api";
+  import { connect, disconnect, on } from "./socket.svelte";
   import { resetCaches } from "./filecache";
   import { resetLsp } from "./lsp.svelte";
   import { forgetDefinitions } from "./definition";
@@ -110,6 +111,8 @@
     resetLsp();
     forgetDefinitions();
     setRepo(next?.id || "");
+    // The connection belongs to the folder: leaving it closes it (connect opens the next one).
+    if (!next) disconnect();
     repo = next;
     summary = null;
     location = { path: "", line: 0 };
@@ -177,13 +180,13 @@
     if (url !== window.location.pathname + window.location.hash) history.replaceState(null, "", url);
   }
 
-  // Git changes (commits, checkouts, staging from a terminal) arrive as events; working-tree edits are
-  // picked up when the window regains focus.
+  // Git changes (commits, checkouts, staging from a terminal) arrive as they happen.
   $effect(() => {
     if (!repo) return;
-    const source = new EventSource(apiURL("/api/git/events"));
-    source.addEventListener("git", (e) => {
-      const n = Number((e as MessageEvent).data);
+    // Git changes arrive on the page's one connection (see socket.svelte.ts).
+    connect(repo.id);
+    return on("git", (m) => {
+      const n = Number(m.n);
       // A change this tab's own action made was already answered with the new state; the answer may
       // still be on its way, so the event waits a moment before it counts.
       setTimeout(() => {
@@ -195,7 +198,6 @@
         void refreshSummary();
       }, 200);
     });
-    return () => source.close();
   });
 
   async function login(e: SubmitEvent) {

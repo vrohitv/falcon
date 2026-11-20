@@ -2,7 +2,6 @@ package server
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -161,71 +160,6 @@ func currentHash(abs string) (string, bool) {
 		return "", !errors.Is(err, os.ErrNotExist)
 	}
 	return domain.Hash(b), true
-}
-
-// watchFiles streams changes to the files open in the IDE as server-sent
-// events. The first event per path reports its current hash, so a client
-// that reconnects detects anything it missed.
-func (s *Server) watchFiles(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
-	paths := r.URL.Query()["path"]
-	if len(paths) == 0 || len(paths) > maxWatched {
-		fail(w, fmt.Errorf("watch 1–%d paths", maxWatched))
-		return
-	}
-	files := map[string]string{}
-	for _, p := range paths {
-		abs, err := s.readable(rp, p)
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		files[abs] = p
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unavailable", http.StatusInternalServerError)
-		return
-	}
-	sub, err := s.watcher.subscribe(files)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotImplemented)
-		_, _ = w.Write(domain.JSON(map[string]string{"error": "file watching is unavailable here: " + err.Error()}))
-		return
-	}
-	defer s.watcher.unsubscribe(sub)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-	send := func(e fileEvent) error {
-		_, err := fmt.Fprintf(w, "event: file\ndata: %s\n\n", domain.JSON(e))
-		return err
-	}
-	for abs, rel := range files {
-		hash, exists := currentHash(abs)
-		if send(fileEvent{Path: rel, Hash: hash, Exists: exists}) != nil {
-			return
-		}
-	}
-	flusher.Flush()
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case e := <-sub.ch:
-			if send(e) != nil {
-				return
-			}
-			flusher.Flush()
-		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
-		}
-	}
 }
 
 // fileStat is the fallback when watching is unavailable: the client asks for
