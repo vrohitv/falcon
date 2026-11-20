@@ -16,6 +16,15 @@
   } = $props();
   type Result = { path: string; name: string; pos: number[]; kind?: string; line?: number };
   // The dialog is made fresh each time it opens, so its first text is all that is needed.
+  // Opened again while it was still fading out (Svelte then keeps the same box), a new start text
+  // (# for symbols) still applies.
+  let shownFor = untrack(() => initial);
+  $effect(() => {
+    if (initial !== shownFor) {
+      shownFor = initial;
+      q = initial;
+    }
+  });
   let q = $state(untrack(() => initial)),
     indexing = $state(false),
     results = $state<Result[]>([]),

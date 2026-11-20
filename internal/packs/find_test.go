@@ -104,3 +104,20 @@ func TestEveryServerHasInstallCommandsForEverySystem(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingToolsAreReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable bits")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "go"), "#!/bin/sh\n")
+	if m := gopls.Missing(dir); len(m) != 0 {
+		t.Fatalf("go is there: %v", m)
+	}
+	if m := gopls.Missing(t.TempDir()); len(m) != 1 || m[0] != "go" {
+		t.Fatalf("go is missing: %v", m)
+	}
+	if m := clangd.Missing(""); len(m) != 0 {
+		t.Fatalf("clangd needs nothing: %v", m)
+	}
+}

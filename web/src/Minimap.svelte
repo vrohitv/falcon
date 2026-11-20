@@ -119,8 +119,9 @@
   // The box: the lines on screen.
   function track() {
     if (!viewport) return;
-    top = (viewport.scrollTop / lineHeight) * scale;
     span = Math.max(8, (viewport.clientHeight / lineHeight) * scale);
+    // The box stays inside the minimap (its least height can carry it past the end).
+    top = Math.min((viewport.scrollTop / lineHeight) * scale, Math.max(0, Math.min(height, total * scale) - span));
   }
   $effect(() => {
     const v = viewport;

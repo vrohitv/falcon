@@ -61,8 +61,10 @@ func ToolDirs() []string {
 		add(join(p, "bin"))
 	}
 	add(join(home, "go", "bin"), join(env("GOROOT"), "bin"))
+	add(newest(join(home, "sdk", "go*", "bin"))...) // go install golang.org/dl/goX.Y
 	// Rust
 	add(join(env("CARGO_HOME"), "bin"), join(home, ".cargo", "bin"))
+	add(join(env("JAVA_HOME"), "bin"))
 	// Node: npm's prefix, nvm, volta, pnpm, bun
 	add(join(env("NPM_CONFIG_PREFIX"), "bin"), env("NVM_BIN"), env("PNPM_HOME"))
 	add(join(home, ".npm-global", "bin"), join(home, ".volta", "bin"), join(home, ".bun", "bin"))
@@ -77,7 +79,9 @@ func ToolDirs() []string {
 		add(newest(join(env("LOCALAPPDATA"), "Programs", "Python", "Python*", "Scripts"))...)
 	default:
 		add("/usr/local/bin", "/usr/bin", "/snap/bin", "/usr/local/go/bin")
+		add(newest("/usr/lib/go-*/bin")...) // Debian and Ubuntu's golang-1.xx
 		add(newest("/usr/lib/llvm-*/bin")...)
+		add(newest("/usr/lib/jvm/*/bin")...)
 	}
 	out, seen := []string{}, map[string]bool{}
 	for _, d := range dirs {
@@ -153,6 +157,24 @@ func SearchPath(command string, roots ...string) string {
 		}
 	}
 	return strings.Join(out, string(os.PathListSeparator))
+}
+
+// Missing are the tools a server needs that are not on path (a PATH-style list, as SearchPath gives).
+func (s Server) Missing(path string) []string {
+	var out []string
+	for _, need := range s.Needs {
+		found := false
+		for _, dir := range filepath.SplitList(path) {
+			if _, ok := executable(dir, need); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, need)
+		}
+	}
+	return out
 }
 
 // Install is one way to install a server: the command, and where it puts the server (Falcon looks there).

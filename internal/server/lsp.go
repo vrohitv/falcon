@@ -321,7 +321,13 @@ func (s *Server) server(ctx context.Context, rp *workspace.Repo, path, from stri
 	if chosen.Slow {
 		timeout = 3 * time.Minute
 	}
-	env := lsp.Env("PATH=" + packs.SearchPath(command, project, root))
+	searchPath := packs.SearchPath(command, project, root)
+	if missing := chosen.Missing(searchPath); len(missing) > 0 {
+		err := fmt.Errorf("%s needs %s to read the project, and it was not found on PATH or where installers put it; install it and press Check again", chosen.Command, strings.Join(missing, " and "))
+		s.lspRuns.note(root, chosen.Command, "failed", err.Error())
+		return sv, err
+	}
+	env := lsp.Env("PATH=" + searchPath)
 	for _, dir := range []string{project, root} {
 		if venv := filepath.Join(dir, ".venv"); dirExists(venv) {
 			env = append(env, "VIRTUAL_ENV="+venv)

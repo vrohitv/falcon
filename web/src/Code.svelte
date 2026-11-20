@@ -148,7 +148,8 @@
     activeId = toId;
   }
   async function dropSplit(fromId: string, path: string, toId: string, place: DropTarget) {
-    if (place === "center") return moveTab(fromId, path, toId);
+    // Its own group's centre: it is already there.
+    if (place === "center") return fromId === toId ? undefined : moveTab(fromId, path, toId);
     // A group's only tab dropped on its own edge stays where it is.
     const from = groups.find((g) => g.id === fromId);
     if (fromId === toId && from && from.state.tabs.length < 2) return;
@@ -173,9 +174,11 @@
     handle.setPointerCapture(e.pointerId);
     document.body.classList.add("resizing");
     const sum = (axis === "x" ? columns : columns.find((c) => c.groups.includes(a as Group))!.groups).reduce((n, x) => n + x.size, 0);
+    // No group gets narrower (or shorter) than 180px, or a tenth of the space if that is less.
+    const least = Math.min(shares / 2, Math.max(0.1 * sum, (180 / total) * sum));
     const move = (ev: PointerEvent) => {
       const delta = (((axis === "x" ? ev.clientX : ev.clientY) - startPos) / total) * sum;
-      const next = Math.min(shares - 0.08 * sum, Math.max(0.08 * sum, startA + delta));
+      const next = Math.min(shares - least, Math.max(least, startA + delta));
       a.size = next;
       b.size = shares - next;
       columns = [...columns];

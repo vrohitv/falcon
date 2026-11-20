@@ -32,6 +32,9 @@ type Server struct {
 	// system ("*" for any), each with where it puts the server.
 	Install  string               `json:"install"`
 	Installs map[string][]Install `json:"-"`
+	// Needs are the tools the server runs (gopls runs go; rust-analyzer cargo; the TypeScript and
+	// Pyright servers node; jdtls java): without them it starts but cannot read the project.
+	Needs []string `json:"needs,omitempty"`
 	// Navigates: it answers definition and references (ruff, a linter, only reports problems).
 	Navigates bool `json:"navigates"`
 	// Slow: it reads the whole project before answering (minutes for a large Java or Rust one).
@@ -64,7 +67,7 @@ const (
 )
 
 var (
-	gopls = installs(Server{Command: "gopls", Args: []string{}, Navigates: true}, map[string][]Install{
+	gopls = installs(Server{Command: "gopls", Args: []string{}, Navigates: true, Needs: []string{"go"}}, map[string][]Install{
 		"*":       {{"go install golang.org/x/tools/gopls@latest", goBin}},
 		"windows": {{"go install golang.org/x/tools/gopls@latest", `%USERPROFILE%\go\bin`}},
 	})
@@ -72,25 +75,25 @@ var (
 		"linux":   {{"sudo apt install clangd", "/usr/bin"}, {"sudo dnf install clang-tools-extra", "/usr/bin"}},
 		"windows": {{"winget install LLVM.LLVM", `C:\Program Files\LLVM\bin`}},
 	})
-	tsserver = installs(Server{Command: "typescript-language-server", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
+	tsserver = installs(Server{Command: "typescript-language-server", Args: []string{"--stdio"}, Navigates: true, Needs: []string{"node"}}, map[string][]Install{
 		"*": {{"npm install -g typescript-language-server typescript", npmBin}, {"npm install --save-dev typescript-language-server typescript", npmLocal}},
 	})
 	// TypeScript 7 (the native compiler) is its own language server: tsc --lsp.
-	tsNative = installs(Server{Command: "tsc", Args: []string{"--lsp", "--stdio"}, Navigates: true, Find: nativeTypeScript}, map[string][]Install{
+	tsNative = installs(Server{Command: "tsc", Args: []string{"--lsp", "--stdio"}, Navigates: true, Find: nativeTypeScript, Needs: []string{"node"}}, map[string][]Install{
 		"*": {{"npm install --save-dev typescript@7", npmLocal}, {"npm install -g typescript@7", npmBin}},
 	})
-	jdtls = installs(Server{Command: "jdtls", Args: []string{"-data", "{data}"}, Navigates: true, Slow: true}, map[string][]Install{
+	jdtls = installs(Server{Command: "jdtls", Args: []string{"-data", "{data}"}, Navigates: true, Slow: true, Needs: []string{"java"}}, map[string][]Install{
 		"linux":   {{"brew install jdtls", "Homebrew's bin folder (needs a recent Java in JAVA_HOME)"}},
 		"windows": {{"scoop install jdtls", `%USERPROFILE%\scoop\shims (needs a recent Java in JAVA_HOME)`}},
 	})
-	ra = installs(Server{Command: "rust-analyzer", Args: []string{}, Navigates: true, Slow: true}, map[string][]Install{
+	ra = installs(Server{Command: "rust-analyzer", Args: []string{}, Navigates: true, Slow: true, Needs: []string{"cargo"}}, map[string][]Install{
 		"*":       {{"rustup component add rust-analyzer", cargoBin}},
 		"windows": {{"rustup component add rust-analyzer", `%USERPROFILE%\.cargo\bin`}},
 	})
 	basedpyright = installs(Server{Command: "basedpyright-langserver", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
 		"*": {{"pipx install basedpyright", pipxBin}, {"npm install -g basedpyright", npmBin}},
 	})
-	pyright = installs(Server{Command: "pyright-langserver", Args: []string{"--stdio"}, Navigates: true}, map[string][]Install{
+	pyright = installs(Server{Command: "pyright-langserver", Args: []string{"--stdio"}, Navigates: true, Needs: []string{"node"}}, map[string][]Install{
 		"*": {{"npm install -g pyright", npmBin}, {"pipx install pyright", pipxBin}},
 	})
 	pylsp = installs(Server{Command: "pylsp", Args: []string{}, Navigates: true}, map[string][]Install{

@@ -963,3 +963,15 @@ body.resizing * {
   border: 0;
   border-top: 1px solid var(--line);
 }
+
+/* On a phone the columns stack: each group gets the full width. */
+@media (max-width: 760px) {
+  .editor-grid {
+    flex-direction: column;
+  }
+  .grid-sash.vertical {
+    width: auto;
+    height: 1px;
+    cursor: row-resize;
+  }
+}

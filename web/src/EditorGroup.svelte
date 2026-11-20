@@ -225,6 +225,12 @@
     }
     if (!tabs.length && !alone) onempty();
   }
+  /** Closes the whole group (its tabs first, asking about unsaved edits). */
+  function closeGroup() {
+    if (alone) return;
+    if (!tabs.length) return onempty();
+    closeMany(() => false);
+  }
   function closeMany(keep: (t: string, i: number) => boolean) {
     const doomed = tabs.filter((t, i) => !keep(t, i));
     if (!doomed.length) return;
@@ -515,6 +521,7 @@
           ><ListTree size={15} /></button
         >{/if}
       {#if selected}<button class="icon-button" title="Split right (Ctrl+\)" aria-label="Split right" onclick={() => onsplit("right", selected, current().view)}><Columns2 size={15} /></button>{/if}
+      {#if !alone}<button class="icon-button" title="Close group" aria-label="Close group" onclick={closeGroup}><X size={15} /></button>{/if}
     </div>
   </div>
   {#if selected}<div class="breadcrumbs">
