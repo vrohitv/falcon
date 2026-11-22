@@ -120,10 +120,6 @@ func (r *Repository) clientGitWith(ctx context.Context, owner bool, index string
 	}
 	return string(out), nil
 }
-func (r *Repository) gitPath(ctx context.Context, name string) (string, error) {
-	p, err := r.clientGit(ctx, "", "rev-parse", "--path-format=absolute", "--git-path", name)
-	return strings.TrimSpace(p), err
-}
 func (r *Repository) GitState(ctx context.Context) (GitState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

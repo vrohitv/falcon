@@ -242,15 +242,6 @@
   position: relative;
   font: 11px/22px var(--font-mono);
 }
-.git-diff-spacer {
-  position: relative;
-}
-.git-diff-rows {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-}
 .git-diff-row,
 .git-hunk {
   height: 22px;
@@ -270,27 +261,6 @@
 }
 .git-diff-row.del {
   background: var(--del-bg);
-}
-.git-line-number {
-  width: 40px;
-  flex-shrink: 0;
-  text-align: right;
-  padding-right: 9px;
-  font-size: 10px;
-  color: var(--subtle);
-  user-select: none;
-}
-.git-diff-sign {
-  width: 20px;
-  flex-shrink: 0;
-  color: var(--muted);
-  user-select: none;
-}
-.git-diff-row.add .git-diff-sign {
-  color: var(--success);
-}
-.git-diff-row.del .git-diff-sign {
-  color: var(--danger);
 }
 .git-diff-row code {
   font: inherit;
@@ -322,39 +292,6 @@
 }
 .git-banner > span {
   flex: 1;
-}
-.git-log-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  width: 100%;
-  text-align: left;
-  padding: 13px;
-  border-bottom: 1px solid var(--line);
-}
-.git-log-entry:hover,
-.git-log-entry.active {
-  background: var(--surface-hover);
-}
-.git-log-entry > strong {
-  font-size: 12px;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
-.git-log-entry > span {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-  font-size: 10px;
-  color: var(--muted);
-}
-.git-log-entry code {
-  color: var(--accent);
-  font-size: 10px;
-}
-.git-log-entry time {
-  margin-left: auto;
-  color: var(--subtle);
 }
 .git-more {
   margin: 14px;

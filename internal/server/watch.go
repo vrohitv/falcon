@@ -30,6 +30,7 @@ type fileEvent struct {
 type watchSub struct {
 	files map[string]string // absolute path -> repository path
 	ch    chan fileEvent
+	done  chan struct{} // closed when unsubscribed: whoever reads ch stops
 }
 
 // fileWatcher pushes changes to files open in the IDE using OS notifications
@@ -70,7 +71,7 @@ func (f *fileWatcher) subscribe(files map[string]string) (*watchSub, error) {
 		f.dirs[dir]++
 		added = append(added, dir)
 	}
-	sub := &watchSub{files: files, ch: make(chan fileEvent, 64)}
+	sub := &watchSub{files: files, ch: make(chan fileEvent, 64), done: make(chan struct{})}
 	f.subs[sub] = struct{}{}
 	return sub, nil
 }
@@ -86,6 +87,9 @@ func (f *fileWatcher) release(dir string) {
 func (f *fileWatcher) unsubscribe(sub *watchSub) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if _, ok := f.subs[sub]; ok {
+		close(sub.done)
+	}
 	delete(f.subs, sub)
 	for abs := range sub.files {
 		f.release(filepath.Dir(abs))

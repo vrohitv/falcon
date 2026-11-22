@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +201,30 @@ func TestSocketRefusesOtherOriginsAndTerminalsCanBeOff(t *testing.T) {
 	ws.send(map[string]any{"t": "term.open", "req": "x", "cols": 80, "rows": 24})
 	if e := ws.expect("error", 3*time.Second); !strings.Contains(e["message"].(string), "turned off") {
 		t.Fatalf("error: %v", e)
+	}
+}
+
+// Changing the watched files (every tab opened or closed) must not leave a goroutine behind each time.
+func TestReplacingWatchedFilesLeavesNothingBehind(t *testing.T) {
+	h := newHarness(t, "")
+	srv := httptest.NewServer(h.s.Handler)
+	t.Cleanup(srv.Close)
+	ws := dial(t, srv, h.a.ID)
+	ws.expect("hello", 3*time.Second)
+	ws.send(map[string]any{"t": "watch", "paths": []string{"main.go"}})
+	ws.expect("file", 3*time.Second)
+	time.Sleep(200 * time.Millisecond)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 100; i++ {
+		paths := []string{"main.go"}
+		if i%2 == 0 {
+			paths = append(paths, "docs/readme.md")
+		}
+		ws.send(map[string]any{"t": "watch", "paths": paths})
+	}
+	ws.send(map[string]any{"t": "watch", "paths": []string{"main.go"}})
+	time.Sleep(500 * time.Millisecond)
+	if after := runtime.NumGoroutine(); after > before+5 {
+		t.Fatalf("goroutines grew from %d to %d after replacing the watched files 100 times", before, after)
 	}
 }

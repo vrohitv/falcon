@@ -300,6 +300,17 @@
         searching = undefined;
       });
   }
+  // The tree filters a moment after typing stops (a large folder has tens of thousands of names).
+  let treeFilter = $state("");
+  $effect(() => {
+    const q = query;
+    if (!q) {
+      treeFilter = "";
+      return;
+    }
+    const timer = setTimeout(() => (treeFilter = q), 120);
+    return () => clearTimeout(timer);
+  });
   $effect(() => {
     if (!query.trim() || searchFiles) return;
     const timer = setTimeout(searchPaths, 120);
@@ -474,7 +485,7 @@
           {files}
           selected={selectedHere}
           label="Explorer files"
-          filter={query}
+          filter={treeFilter}
           storageKey={"falcon.tree.explorer:" + repoID}
           fill
           onopen={(path) => {

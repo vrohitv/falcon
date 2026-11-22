@@ -682,12 +682,6 @@ svg {
   background: var(--del-bg);
   color: var(--del-fg);
 }
-.prose {
-  white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.9;
-  color: var(--text);
-}
 .modal-backdrop {
   position: fixed;
   inset: 0;

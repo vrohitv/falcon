@@ -18,8 +18,6 @@ import (
 	"github.com/vrohitv/falcon/internal/workspace"
 )
 
-func getenv(k string) string { return os.Getenv(k) }
-
 func (s *Server) gitStatus(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	state, err := rp.Repo.GitState(r.Context())
 	if err != nil {
@@ -229,15 +227,6 @@ type gitWatch struct {
 	quietUntil time.Time
 	last       string
 	gen        int
-}
-
-// gitChanged tells open panels the repository changed and returns the change's number.
-func (s *Server) gitChanged(rp *workspace.Repo) int {
-	s.index(rp).Invalidate()
-	if gw := s.currentWatch(rp); gw != nil {
-		return gw.fire()
-	}
-	return 0
 }
 
 func (s *Server) currentWatch(rp *workspace.Repo) *gitWatch {

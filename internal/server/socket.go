@@ -216,14 +216,10 @@ func (c *wsConn) watch(paths []string) {
 			select {
 			case <-c.ctx.Done():
 				return
+			case <-sub.done:
+				return // replaced by a newer set of files
 			case e, ok := <-sub.ch:
 				if !ok {
-					return
-				}
-				c.mu.Lock()
-				current := c.files == sub
-				c.mu.Unlock()
-				if !current {
 					return
 				}
 				c.send(map[string]any{"t": "file", "path": e.Path, "hash": e.Hash, "exists": e.Exists})
