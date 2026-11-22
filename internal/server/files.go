@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vrohitv/falcon/internal/ide"
@@ -43,11 +44,65 @@ func (s *Server) fuzzy(w http.ResponseWriter, r *http.Request, rp *workspace.Rep
 	respond(w, res)
 }
 
-// symbols searches every declared name in the folder (go to symbol), from the symbol index.
+// symbols searches every declared name in the folder (go to symbol): the folder's own symbol index, and
+// the language servers running for it (workspace/symbol), which know what the index's patterns cannot.
 func (s *Server) symbols(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	x := s.index(rp)
 	x.Warm(3 * time.Second)
-	respond(w, map[string]any{"ready": x.Ready(), "symbols": x.Search(r.URL.Query().Get("q"), 100)})
+	q := r.URL.Query().Get("q")
+	type sym struct {
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		Path      string `json:"path"`
+		Line      int    `json:"line"`
+		Container string `json:"container,omitempty"`
+	}
+	out := []sym{}
+	seen := map[string]bool{}
+	for _, h := range x.Search(q, 100) {
+		seen[h.Path+":"+strconv.Itoa(h.Line)] = true
+		out = append(out, sym{Name: h.Name, Kind: h.Kind, Path: h.Path, Line: h.Line})
+	}
+	if strings.TrimSpace(q) != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+		defer cancel()
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, c := range s.lsps.Clients(rp.Repo.Path) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				raw, err := c.Call(ctx, "workspace/symbol", map[string]any{"query": q})
+				if err != nil {
+					return
+				}
+				found := s.lspSymbols(rp, raw)
+				mu.Lock()
+				defer mu.Unlock()
+				for _, f := range found {
+					p, _ := f["path"].(string)
+					line, _ := f["line"].(int)
+					if seen[p+":"+strconv.Itoa(line)] {
+						continue
+					}
+					seen[p+":"+strconv.Itoa(line)] = true
+					out = append(out, sym{Name: f["name"].(string), Kind: symbolKind(f["kind"].(int)), Path: p, Line: line, Container: f["container"].(string)})
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	respond(w, map[string]any{"ready": x.Ready(), "symbols": out})
+}
+
+// symbolKind names an LSP SymbolKind the way the index names its kinds.
+func symbolKind(k int) string {
+	names := map[int]string{1: "file", 2: "module", 3: "namespace", 4: "package", 5: "class", 6: "method", 7: "property", 8: "field",
+		9: "constructor", 10: "enum", 11: "interface", 12: "function", 13: "variable", 14: "constant", 22: "member", 23: "struct", 26: "type"}
+	if n, ok := names[k]; ok {
+		return n
+	}
+	return "symbol"
 }
 
 // codeWindow is a window of a file's lines, highlighted, for the viewer (which only asks for what is on

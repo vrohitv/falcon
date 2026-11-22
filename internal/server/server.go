@@ -49,6 +49,8 @@ type Server struct {
 	lspRuns   lspRuns
 	external  externalFiles
 	lspWatch  lspWatch
+	edits     pendingEdits
+	socks     sockets
 	git       gitState
 	idxMu     sync.Mutex
 	indexes   map[string]*index.Index
@@ -168,6 +170,8 @@ func New(ws *workspace.Workspace, token, assets, data string) *Server {
 		"GET lsp/status":       s.lspStatus,
 		"POST lsp":             s.lsp,
 		"POST lsp/diagnostics": s.lspDiagnostics,
+		"POST lsp/apply":       s.lspApply,
+		"GET lsp/problems":     s.lspProblems,
 		"GET git/status":       s.gitStatus,
 		"GET git/log":          s.gitLog,
 		"GET git/graph":        s.gitGraph,

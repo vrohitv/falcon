@@ -5,3 +5,4 @@ web/.e2e/
 /falcon
 /falcon.exe
 /falcon-bin
+web/.e2e-lsp/

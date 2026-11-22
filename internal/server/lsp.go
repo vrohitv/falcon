@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -255,7 +256,10 @@ func (s *Server) languages(w http.ResponseWriter, r *http.Request, rp *workspace
 var lspMethods = map[string]bool{
 	"textDocument/definition": true, "textDocument/declaration": true, "textDocument/typeDefinition": true,
 	"textDocument/implementation": true, "textDocument/references": true,
-	"textDocument/hover": false, "textDocument/documentSymbol": false,
+	"textDocument/hover": false, "textDocument/documentSymbol": false, "textDocument/documentHighlight": false,
+	"textDocument/prepareCallHierarchy": true, "callHierarchy/incomingCalls": true, "callHierarchy/outgoingCalls": true,
+	"textDocument/prepareRename": false, "textDocument/rename": true, "textDocument/codeAction": false,
+	"workspace/symbol": true,
 }
 
 // served is a language server ready for one file: the running server, which one it is, the project root
@@ -339,7 +343,14 @@ func (s *Server) server(ctx context.Context, rp *workspace.Repo, path, from stri
 	if init == nil && settings != nil {
 		init = settings[chosen.Command]
 	}
-	running, err := s.lsps.Get(ctx, lsp.Options{Root: root, Command: command, Args: args, Env: env, InitTimeout: timeout, InitOptions: init, Settings: settings})
+	applyEdit := func(raw json.RawMessage) error {
+		plan, err := planEdit(rp, raw)
+		if err == nil {
+			_, err = s.apply(rp, plan)
+		}
+		return err
+	}
+	running, err := s.lsps.Get(ctx, lsp.Options{Root: root, Command: command, Args: args, Env: env, InitTimeout: timeout, InitOptions: init, Settings: settings, ApplyEdit: applyEdit, OnDiagnostics: func() { s.problemsChanged(rp.ID) }})
 	if err != nil {
 		s.lspRuns.note(root, chosen.Command, "failed", err.Error())
 		return sv, err
@@ -365,7 +376,13 @@ func (s *Server) lsp(w http.ResponseWriter, r *http.Request, rp *workspace.Repo)
 		Method       string `json:"method"`
 		Line         int    `json:"line"`
 		Character    int    `json:"character"`
-		ExpectedHash string `json:"expected_hash"`
+		EndLine      int    `json:"end_line"` // a range's end (code actions)
+		EndCharacter int    `json:"end_character"`
+		NewName      string `json:"new_name"` // rename
+		Query        string `json:"query"`    // workspace/symbol
+		// Item: a call hierarchy item the server gave before (incoming and outgoing calls).
+		Item         json.RawMessage `json:"item"`
+		ExpectedHash string          `json:"expected_hash"`
 	}
 	if err := body(w, r, &input); err != nil {
 		fail(w, err)
@@ -398,23 +415,43 @@ func (s *Server) lsp(w http.ResponseWriter, r *http.Request, rp *workspace.Repo)
 		}
 		partial = !client.WaitIdle(ctx, limit)
 	}
-	params := map[string]any{"textDocument": map[string]string{"uri": sv.uri}}
-	if input.Method != "textDocument/documentSymbol" {
-		// The editor counts characters; the LSP counts UTF-16 units.
-		params["position"] = map[string]int{"line": input.Line, "character": utf16Column(sv.file.Content, input.Line, input.Character)}
+	// The editor counts characters; the LSP counts UTF-16 units.
+	position := func(line, chars int) map[string]int {
+		return map[string]int{"line": line, "character": utf16Column(sv.file.Content, line, chars)}
 	}
-	if input.Method == "textDocument/references" {
+	params := map[string]any{"textDocument": map[string]string{"uri": sv.uri}}
+	switch input.Method {
+	case "textDocument/documentSymbol":
+	case "workspace/symbol":
+		params = map[string]any{"query": input.Query}
+	case "callHierarchy/incomingCalls", "callHierarchy/outgoingCalls":
+		params = map[string]any{"item": input.Item}
+	case "textDocument/codeAction":
+		rng := map[string]any{"start": position(input.Line, input.Character), "end": position(input.EndLine, input.EndCharacter)}
+		params["range"] = rng
+		params["context"] = map[string]any{"diagnostics": diagnosticsIn(client.Diagnostics(sv.uri), input.Line, input.EndLine), "triggerKind": 1}
+	default:
+		params["position"] = position(input.Line, input.Character)
+	}
+	switch input.Method {
+	case "textDocument/references":
 		params["context"] = map[string]bool{"includeDeclaration": true}
+	case "textDocument/rename":
+		if strings.TrimSpace(input.NewName) == "" {
+			fail(w, errors.New("a new name is needed"))
+			return
+		}
+		params["newName"] = input.NewName
 	}
 	result, err := client.Call(ctx, input.Method, params)
 	if err != nil {
 		// A server that does not implement the request is working; it just cannot answer this one.
 		if strings.Contains(err.Error(), "-32601") {
 			s.lspRuns.note(sv.root, sv.chosen.Command, "ready", "does not answer "+strings.TrimPrefix(input.Method, "textDocument/")+" requests")
-		} else {
+		} else if input.Method != "textDocument/prepareRename" && input.Method != "textDocument/rename" {
 			s.lspRuns.note(sv.root, sv.chosen.Command, "failed", err.Error())
 		}
-		fail(w, err)
+		fail(w, lspError(err))
 		return
 	}
 	s.lspRuns.note(sv.root, sv.chosen.Command, "ready", "")
@@ -428,9 +465,389 @@ func (s *Server) lsp(w http.ResponseWriter, r *http.Request, rp *workspace.Repo)
 	case "textDocument/hover":
 		out["hover"] = hoverText(result)
 	case "textDocument/documentSymbol":
+	case "textDocument/documentHighlight":
+		out["highlights"] = highlights(sv.file.Content, result)
+	case "textDocument/prepareCallHierarchy":
+		out["items"] = s.callItems(rp, result)
+	case "callHierarchy/incomingCalls":
+		out["calls"] = s.calls(rp, result, "from")
+	case "callHierarchy/outgoingCalls":
+		out["calls"] = s.calls(rp, result, "to")
+	case "workspace/symbol":
+		out["symbols"] = s.lspSymbols(rp, result)
+	case "textDocument/prepareRename":
+		out["rename"] = renameRange(sv.file.Content, result)
+	case "textDocument/rename":
+		if string(result) == "null" || len(result) == 0 {
+			fail(w, errors.New("the language server cannot rename this"))
+			return
+		}
+		plan, err := planEdit(rp, result)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		pv, err := preview(rp, plan)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		out["preview"] = pv
+		out["token"] = s.edits.put(pendingEdit{repo: rp.ID, plan: &plan})
+		delete(out, "result")
+	case "textDocument/codeAction":
+		out["actions"] = s.codeActions(rp, sv.running, result)
+		delete(out, "result")
 	default:
 		out["locations"] = s.locations(rp, result)
 	}
+	respond(w, out)
+}
+
+// lspError makes a language server's error readable (its message, without the JSON around it).
+func lspError(err error) error {
+	msg := err.Error()
+	if i := strings.Index(msg, `"message":"`); i >= 0 {
+		rest := msg[i+len(`"message":"`):]
+		if j := strings.Index(rest, `"`); j >= 0 {
+			return errors.New(rest[:j])
+		}
+	}
+	return err
+}
+
+// diagnosticsIn are the reported problems on lines from..to, for a code action request.
+func diagnosticsIn(raw json.RawMessage, from, to int) []json.RawMessage {
+	var report struct {
+		Diagnostics []json.RawMessage `json:"diagnostics"`
+	}
+	_ = json.Unmarshal(raw, &report)
+	out := []json.RawMessage{}
+	for _, d := range report.Diagnostics {
+		var r struct {
+			Range lspRange `json:"range"`
+		}
+		if json.Unmarshal(d, &r) == nil && r.Range.Start.Line <= to && r.Range.End.Line >= from {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+type highlight struct {
+	Line  int `json:"line"` // 1-based
+	Start int `json:"start"`
+	End   int `json:"end"`  // characters; the line's end when the range runs onto the next line
+	Kind  int `json:"kind"` // 1 text, 2 read, 3 write
+}
+
+func highlights(content string, raw json.RawMessage) []highlight {
+	var items []struct {
+		Range lspRange `json:"range"`
+		Kind  int      `json:"kind"`
+	}
+	_ = json.Unmarshal(raw, &items)
+	out := []highlight{}
+	for _, h := range items {
+		end := charColumn(content, h.Range.End)
+		if h.Range.End.Line != h.Range.Start.Line {
+			end = 1 << 20
+		}
+		out = append(out, highlight{Line: h.Range.Start.Line + 1, Start: charColumn(content, h.Range.Start), End: end, Kind: max(h.Kind, 1)})
+	}
+	return out
+}
+
+// renameRange is where a rename applies and the current name ({line, start, end, placeholder}), or nil
+// when the server says nothing can be renamed there.
+func renameRange(content string, raw json.RawMessage) map[string]any {
+	var r struct {
+		lspRange
+		Range        *lspRange `json:"range"`
+		Placeholder  string    `json:"placeholder"`
+		DefaultBehav bool      `json:"defaultBehavior"`
+	}
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	rng := r.lspRange
+	if r.Range != nil {
+		rng = *r.Range
+	}
+	if r.DefaultBehav {
+		return map[string]any{"default": true}
+	}
+	start, end := charColumn(content, rng.Start), charColumn(content, rng.End)
+	name := r.Placeholder
+	if name == "" {
+		line := strings.Split(content[lineStart(content, rng.Start.Line):], "\n")[0]
+		runes := []rune(line)
+		if start <= end && end <= len(runes) {
+			name = string(runes[start:end])
+		}
+	}
+	return map[string]any{"line": rng.Start.Line + 1, "start": start, "end": end, "placeholder": name}
+}
+
+// callItem is one function in a call hierarchy, placed in the folder, with the server's own item kept to
+// ask for its callers or callees next.
+type callItem struct {
+	Name     string          `json:"name"`
+	Kind     int             `json:"kind"`
+	Detail   string          `json:"detail,omitempty"`
+	Path     string          `json:"path"`
+	Line     int             `json:"line"`
+	External string          `json:"external,omitempty"`
+	Item     json.RawMessage `json:"item"`
+}
+
+func (s *Server) callItem(rp *workspace.Repo, raw json.RawMessage) (callItem, bool) {
+	var it struct {
+		Name           string   `json:"name"`
+		Kind           int      `json:"kind"`
+		Detail         string   `json:"detail"`
+		URI            string   `json:"uri"`
+		SelectionRange lspRange `json:"selectionRange"`
+	}
+	if json.Unmarshal(raw, &it) != nil || it.URI == "" {
+		return callItem{}, false
+	}
+	loc, ok := s.place(rp, it.URI)
+	if !ok {
+		return callItem{}, false
+	}
+	return callItem{Name: it.Name, Kind: it.Kind, Detail: it.Detail, Path: loc.Path, External: loc.External, Line: it.SelectionRange.Start.Line + 1, Item: raw}, true
+}
+
+func (s *Server) callItems(rp *workspace.Repo, raw json.RawMessage) []callItem {
+	var items []json.RawMessage
+	_ = json.Unmarshal(raw, &items)
+	out := []callItem{}
+	for _, it := range items {
+		if c, ok := s.callItem(rp, it); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// calls are a function's callers (from) or callees (to), each with the lines where the call is made.
+func (s *Server) calls(rp *workspace.Repo, raw json.RawMessage, side string) []map[string]any {
+	var items []map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &items)
+	out := []map[string]any{}
+	for _, it := range items {
+		c, ok := s.callItem(rp, it[side])
+		if !ok {
+			continue
+		}
+		var ranges []lspRange
+		_ = json.Unmarshal(it["fromRanges"], &ranges)
+		lines := []int{}
+		for _, r := range ranges {
+			lines = append(lines, r.Start.Line+1)
+		}
+		out = append(out, map[string]any{"item": c, "lines": lines})
+	}
+	return out
+}
+
+// place is a file: URI as a folder path (or an outside file, opened read-only).
+func (s *Server) place(rp *workspace.Repo, uri string) (location, bool) {
+	if p := folderPath(rp, uri); p != "" {
+		return location{Path: p}, true
+	}
+	abs := lsp.FromURI(uri)
+	if abs == "" {
+		return location{}, false
+	}
+	if p := s.external.add(rp.ID, abs); p != "" {
+		return location{Path: p, External: abs}, true
+	}
+	return location{}, false
+}
+
+// symbols are workspace/symbol answers, placed in the folder.
+func (s *Server) lspSymbols(rp *workspace.Repo, raw json.RawMessage) []map[string]any {
+	var items []struct {
+		Name      string `json:"name"`
+		Kind      int    `json:"kind"`
+		Container string `json:"containerName"`
+		Location  struct {
+			URI   string    `json:"uri"`
+			Range *lspRange `json:"range"`
+		} `json:"location"`
+	}
+	_ = json.Unmarshal(raw, &items)
+	out := []map[string]any{}
+	for _, it := range items {
+		loc, ok := s.place(rp, it.Location.URI)
+		if !ok || loc.External != "" {
+			continue // symbols of libraries: too many, and outside what is being read
+		}
+		line := 1
+		if it.Location.Range != nil {
+			line = it.Location.Range.Start.Line + 1
+		}
+		out = append(out, map[string]any{"name": it.Name, "kind": it.Kind, "container": it.Container, "path": loc.Path, "line": line})
+		if len(out) >= 300 {
+			break
+		}
+	}
+	return out
+}
+
+// codeActions are the fixes and refactorings offered, each kept under a token to apply it later.
+func (s *Server) codeActions(rp *workspace.Repo, running *lsp.Running, raw json.RawMessage) []map[string]any {
+	var items []json.RawMessage
+	_ = json.Unmarshal(raw, &items)
+	out := []map[string]any{}
+	for _, it := range items {
+		var a struct {
+			Title       string          `json:"title"`
+			Kind        string          `json:"kind"`
+			IsPreferred bool            `json:"isPreferred"`
+			Disabled    *struct{}       `json:"disabled"`
+			Command     json.RawMessage `json:"command"`
+		}
+		if json.Unmarshal(it, &a) != nil || a.Title == "" || a.Disabled != nil {
+			continue
+		}
+		// A bare Command (the older form): its title, and run as it is.
+		out = append(out, map[string]any{"title": a.Title, "kind": a.Kind, "preferred": a.IsPreferred,
+			"token": s.edits.put(pendingEdit{repo: rp.ID, action: it, running: running})})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i]["preferred"].(bool) && !out[j]["preferred"].(bool) })
+	return out
+}
+
+// lspApply applies an edit shown before (a rename), or runs a code action: its edit (resolved first when
+// the server sends it later), then its command (whose edits come back as workspace/applyEdit).
+func (s *Server) lspApply(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
+	var input struct {
+		Token string `json:"token"`
+	}
+	if err := body(w, r, &input); err != nil {
+		fail(w, err)
+		return
+	}
+	pe, ok := s.edits.take(rp.ID, input.Token)
+	if !ok {
+		fail(w, errors.New("this change is no longer available; ask again"))
+		return
+	}
+	if pe.plan != nil {
+		changed, err := s.apply(rp, *pe.plan)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		respond(w, map[string]any{"changed": changed})
+		return
+	}
+	client := pe.running.Client()
+	if client == nil || !client.Alive() {
+		fail(w, errors.New("the language server has stopped; ask again"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	action := pe.action
+	var a struct {
+		Edit    json.RawMessage `json:"edit"`
+		Command json.RawMessage `json:"command"`
+		Data    json.RawMessage `json:"data"`
+	}
+	_ = json.Unmarshal(action, &a)
+	// A Command on its own (title, command, arguments) rather than a CodeAction.
+	var bare struct {
+		Command   string          `json:"command"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(action, &bare) == nil && bare.Command != "" && len(a.Command) == 0 {
+		a.Command = action
+	} else if len(a.Edit) == 0 && len(a.Data) > 0 {
+		if resolved, err := client.Call(ctx, "codeAction/resolve", action); err == nil {
+			_ = json.Unmarshal(resolved, &a)
+		}
+	}
+	changed := []string{}
+	if len(a.Edit) > 0 && string(a.Edit) != "null" {
+		plan, err := planEdit(rp, a.Edit)
+		if err == nil {
+			changed, err = s.apply(rp, plan)
+		}
+		if err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	if len(a.Command) > 0 && string(a.Command) != "null" {
+		var cmd struct {
+			Command   string          `json:"command"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if json.Unmarshal(a.Command, &cmd) == nil && cmd.Command != "" {
+			params := map[string]any{"command": cmd.Command}
+			if len(cmd.Arguments) > 0 {
+				params["arguments"] = cmd.Arguments
+			}
+			if _, err := client.Call(ctx, "workspace/executeCommand", params); err != nil {
+				fail(w, lspError(err))
+				return
+			}
+		}
+	}
+	respond(w, map[string]any{"changed": changed})
+}
+
+// lspProblems are the problems every language server running for the folder has reported, by file.
+func (s *Server) lspProblems(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
+	type problem struct {
+		Path      string `json:"path"`
+		Line      int    `json:"line"`
+		Character int    `json:"character"`
+		Severity  int    `json:"severity"`
+		Message   string `json:"message"`
+		Source    string `json:"source,omitempty"`
+		Server    string `json:"server"`
+	}
+	out := []problem{}
+	for server, reports := range s.lsps.Diagnostics(rp.Repo.Path) {
+		for uri, raw := range reports {
+			p := folderPath(rp, uri)
+			if p == "" {
+				continue
+			}
+			var report struct {
+				Diagnostics []struct {
+					Range    lspRange `json:"range"`
+					Severity int      `json:"severity"`
+					Message  string   `json:"message"`
+					Source   string   `json:"source"`
+				} `json:"diagnostics"`
+			}
+			if json.Unmarshal(raw, &report) != nil {
+				continue
+			}
+			for _, d := range report.Diagnostics {
+				sev := d.Severity
+				if sev == 0 {
+					sev = 1
+				}
+				out = append(out, problem{Path: p, Line: d.Range.Start.Line + 1, Character: d.Range.Start.Character, Severity: sev, Message: d.Message, Source: d.Source, Server: filepath.Base(server)})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Severity != out[j].Severity {
+			return out[i].Severity < out[j].Severity
+		}
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Line < out[j].Line
+	})
 	respond(w, out)
 }
 

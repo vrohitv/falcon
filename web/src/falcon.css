@@ -824,3 +824,8 @@ input.palette-input:focus {
   color: var(--syn-number);
   background: color-mix(in srgb, var(--syn-number) 14%, transparent);
 }
+
+.activity-badge.error {
+  background: var(--danger);
+  color: #fff;
+}

@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,6 +175,36 @@ func (p *Pool) Serving(folder string) bool {
 		}
 	}
 	return false
+}
+
+// Clients are the running servers of a folder.
+func (p *Pool) Clients(folder string) []*Client {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := []*Client{}
+	for _, r := range p.servers {
+		if within(folder, r.Root) && r.Client() != nil && r.client.Alive() {
+			out = append(out, r.client)
+		}
+	}
+	return out
+}
+
+// Diagnostics are the problems every server running for a folder has reported: server → uri → report.
+func (p *Pool) Diagnostics(folder string) map[string]map[string]json.RawMessage {
+	p.mu.Lock()
+	var running []*Running
+	for _, r := range p.servers {
+		if within(folder, r.Root) && r.Client() != nil {
+			running = append(running, r)
+		}
+	}
+	p.mu.Unlock()
+	out := map[string]map[string]json.RawMessage{}
+	for _, r := range running {
+		out[r.Command] = r.client.AllDiagnostics()
+	}
+	return out
 }
 
 // FilesChanged tells the servers of a folder what changed on disk. A document a server has open is

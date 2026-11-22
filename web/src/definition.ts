@@ -148,3 +148,50 @@ export async function problemsFor(path: string): Promise<{ problems: Problem[]; 
   });
   return { problems: reply.diagnostics || [], hash: reply.hash, indexing: reply.indexing };
 }
+
+// The language features beyond navigation. Each asks the file's language server through /api/lsp.
+async function ask<T>(q: Record<string, unknown> & { path: string }): Promise<T> {
+  return api<T>("/api/lsp", { method: "POST", body: JSON.stringify({ from: fromFor(q.path), ...q }) });
+}
+
+/** A place where the name at the caret appears in its file (kind 1 text, 2 read, 3 write). */
+export type Occurrence = { line: number; start: number; end: number; kind: number };
+export async function occurrencesAt(path: string, line: number, character: number, hash: string): Promise<Occurrence[]> {
+  const r = await ask<{ highlights?: Occurrence[] }>({ path, method: "textDocument/documentHighlight", line, character, expected_hash: hash });
+  return r.highlights || [];
+}
+
+/** One function in a call hierarchy; item is the server's own, to ask for its callers or callees. */
+export type CallItem = { name: string; kind: number; detail?: string; path: string; line: number; external?: string; item: unknown };
+export type Call = { item: CallItem; lines: number[] };
+export async function prepareCalls(path: string, line: number, character: number, hash: string): Promise<CallItem[]> {
+  const r = await ask<{ items?: CallItem[] }>({ path, method: "textDocument/prepareCallHierarchy", line, character, expected_hash: hash });
+  return r.items || [];
+}
+export async function callsOf(path: string, item: CallItem, direction: "incoming" | "outgoing"): Promise<Call[]> {
+  const r = await ask<{ calls?: Call[] }>({ path, method: `callHierarchy/${direction}Calls`, item: item.item });
+  for (const c of r.calls || []) if (c.item.external) remember([{ path: c.item.path, line: c.item.line, external: c.item.external }], path);
+  return r.calls || [];
+}
+
+/** Where a rename applies and the current name; null when nothing can be renamed there. */
+export async function prepareRename(path: string, line: number, character: number, hash: string): Promise<{ line: number; start: number; end: number; placeholder: string; default?: boolean } | null> {
+  const r = await ask<{ rename?: { line: number; start: number; end: number; placeholder: string; default?: boolean } | null }>({ path, method: "textDocument/prepareRename", line, character, expected_hash: hash });
+  return r.rename ?? null;
+}
+export type EditPreview = { path: string; changes: { line: number; before: string; after: string }[]; created?: boolean; renamed?: string };
+export async function renameSymbol(path: string, line: number, character: number, hash: string, newName: string): Promise<{ preview: EditPreview[]; token: string }> {
+  return ask({ path, method: "textDocument/rename", line, character, expected_hash: hash, new_name: newName });
+}
+
+export type CodeAction = { title: string; kind: string; preferred: boolean; token: string };
+export async function codeActions(path: string, line: number, character: number, endLine: number, endCharacter: number, hash: string): Promise<CodeAction[]> {
+  const r = await ask<{ actions?: CodeAction[] }>({ path, method: "textDocument/codeAction", line, character, end_line: endLine, end_character: endCharacter, expected_hash: hash });
+  return r.actions || [];
+}
+
+/** Applies a previewed rename or a code action: the files it changed. */
+export async function applyChange(token: string): Promise<string[]> {
+  const r = await api<{ changed: string[] }>("/api/lsp/apply", { method: "POST", body: JSON.stringify({ token }) });
+  return r.changed || [];
+}

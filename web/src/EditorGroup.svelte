@@ -12,7 +12,8 @@
   import MarkdownView from "./MarkdownView.svelte";
   import MediaView from "./MediaView.svelte";
   import { kindOf } from "./file-kind";
-  import { definitions, isExternal, lspStateFor, lspStatus, lspUsable } from "./definition";
+  import { definitions, isExternal, lspStateFor, lspStatus, lspUsable, type CallItem } from "./definition";
+  import CallHierarchy from "./CallHierarchy.svelte";
   import { confirmDiscard } from "./confirm.svelte";
   import { tabDrag, startTabDrag, endTabDrag } from "./tabdrag.svelte";
   import { fade, fly, slide } from "./motion";
@@ -86,7 +87,8 @@
 
   let selected = $state(untrack(() => initial.selected)),
     tabs = $state<string[]>(untrack(() => [...initial.tabs])),
-    mode = $state<"source" | "diff" | "results">("source"),
+    mode = $state<"source" | "diff" | "results" | "calls">("source"),
+    calls = $state<{ root: CallItem; from: string } | null>(null),
     outline = $state<any[]>([]),
     showOutline = $state(false),
     results = $state<{ path: string; line: number; content: string; kind?: string; column?: number; end?: number }[]>([]),
@@ -575,6 +577,9 @@
             <h3>Nothing found</h3>
           </div>{/if}
       </div>
+    {:else if mode === "calls" && calls}<div class="search-results" in:fade={{ duration: 120 }}>
+        {#key calls}<CallHierarchy root={calls.root} path={calls.from} onopen={(p, l) => jump(p, l)} onclose={() => (mode = "source")} />{/key}
+      </div>
     {:else if mode === "diff"}<div class="diff-view" in:fade={{ duration: 120 }}>
         <div class="panel-heading">
           <h3>Changes to {selected.split("/").at(-1)}</h3>
@@ -613,6 +618,10 @@
           bind:this={viewer}
           onjump={jump}
           onreferences={references}
+          oncalls={(items) => {
+            calls = { root: items[0], from: selected };
+            mode = "calls";
+          }}
           onnotice={onerror}
           disk={myDisk}
           path={selected}

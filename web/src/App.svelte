@@ -18,7 +18,8 @@
   import type { GitState } from "./git";
   import { confirmDialog } from "./confirm.svelte";
   import { fade, fly } from "./motion";
-  import { Files, Search, FileSearch, GitBranch, FolderGit2, ChevronsUpDown, Plus, Sun, Moon, SunMoon, SquareTerminal } from "@lucide/svelte";
+  import { Files, Search, FileSearch, GitBranch, FolderGit2, ChevronsUpDown, Plus, Sun, Moon, SunMoon, SquareTerminal, CircleX, TriangleAlert, ListTree } from "@lucide/svelte";
+  import { problems, followProblems } from "./problems.svelte";
 
   let repos = $state<Repo[]>([]),
     repo = $state<Repo | null>(null),
@@ -27,7 +28,7 @@
     token = $state(""),
     version = $state(""),
     view = $state<"code" | "git">("code"),
-    side = $state<"explorer" | "search" | "">("explorer"),
+    side = $state<"explorer" | "search" | "problems" | "">("explorer"),
     quickOpen = $state(false),
     quickStart = $state(""),
     foldersOpen = $state(false),
@@ -230,6 +231,7 @@
     if (!repo) return;
     // Git changes arrive on the page's one connection (see socket.svelte.ts).
     connect(repo.id);
+    followProblems();
     // On (re)connecting, look again: changes made while the page loaded or was disconnected are not
     // events (the server's watch began after them).
     const offHello = on("hello", () => {
@@ -282,7 +284,7 @@
     await enter(id, !at.id && !!id, at.path, at.line);
     if (!at.id && id) history.replaceState(null, "", `/r/${encodeURIComponent(id)}/`);
   }
-  function showSide(which: "explorer" | "search") {
+  function showSide(which: "explorer" | "search" | "problems") {
     if (view === "code" && side === which) side = "";
     else {
       side = which;
@@ -340,6 +342,9 @@
       e.preventDefault();
       side = "search";
       view = "code";
+    } else if (mod && e.shiftKey && k === "m" && repo) {
+      e.preventDefault();
+      showSide("problems");
     } else if (mod && e.shiftKey && k === "e" && repo) {
       e.preventDefault();
       showSide("explorer");
@@ -373,6 +378,9 @@
         <button class:active={view === "code" && side === "explorer"} title="Explorer (Ctrl+Shift+E)" aria-label="Explorer" onclick={() => showSide("explorer")}><Files size={20} /></button>
         <button title="Go to file (Ctrl+P)" aria-label="Go to file" onclick={() => ((quickStart = ""), (quickOpen = true))}><FileSearch size={20} /></button>
         <button class:active={view === "code" && side === "search"} title="Search (Ctrl+Shift+F)" aria-label="Search" onclick={() => showSide("search")}><Search size={20} /></button>
+        <button class:active={view === "code" && side === "problems"} title="Problems (Ctrl+Shift+M)" aria-label="Problems" onclick={() => showSide("problems")}
+          ><ListTree size={20} />{#if problems.errors}<span class="activity-badge error" in:fly={{ y: -3, duration: 160 }}>{problems.errors > 99 ? "99+" : problems.errors}</span>{/if}</button
+        >
         <button class:active={view === "git"} title="Source Control (Ctrl+Shift+G)" aria-label="Source Control" onclick={() => (view = view === "git" ? "code" : "git")}
           ><GitBranch size={20} />{#if summary?.changes}<span class="activity-badge" in:fly={{ y: -3, duration: 160 }}>{summary.changes > 99 ? "99+" : summary.changes}</span>{/if}</button
         >
@@ -457,6 +465,8 @@
           ><FolderGit2 size={12} /><strong>{repo.name}</strong><ChevronsUpDown size={11} /></button
         ><button class="status-item mobile-only" onclick={() => ((quickStart = ""), (quickOpen = true))} aria-label="Go to file"><FileSearch size={12} /></button
         ><button class="status-item" class:on={terminalOpen} onclick={() => (terminalOpen ? (terminalOpen = false) : void showTerminal())} title="Terminal (Ctrl+`)" aria-label="Terminal"><SquareTerminal size={12} /><span class="wide-only">Terminal</span></button
+        ><button class="status-item" onclick={() => showSide("problems")} title="Problems (Ctrl+Shift+M)" aria-label="Problems"
+          ><CircleX size={12} />{problems.errors}<TriangleAlert size={12} />{problems.warnings}</button
         >{#if summary?.branch}<button class="status-item" onclick={() => (view = "git")} title="Source Control"
             ><GitBranch size={12} />{summary.branch}{#if summary.changes}<span class="status-changes">· {summary.changes} changed</span>{/if}</button
           >{/if}{#if location.path}<span class="status-item subtle wide-only">{location.path}{location.line ? ":" + location.line : ""}</span>{/if}{/if}

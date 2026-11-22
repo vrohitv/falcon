@@ -24,7 +24,7 @@ import (
 // "cols":…,"rows":…}; {"t":"term.attach","id":…}; {"t":"term.detach","id":…}; {"t":"term.resize",
 // "id":…,"cols":…,"rows":…}; {"t":"term.close","id":…}; {"t":"term.ack","id":…,"bytes":…} (output drawn).
 //
-// server → page: {"t":"hello","terminal":bool}; {"t":"git","n":…}; {"t":"file",…};
+// server → page: {"t":"hello","terminal":bool}; {"t":"git","n":…}; {"t":"file",…}; {"t":"problems"};
 // {"t":"watch.unavailable"}; {"t":"term.opened","req":…,"session":…}; {"t":"term.attached","id":…};
 // {"t":"term.gone","id":…}; {"t":"term.exit","id":…,"code":…}; {"t":"error","req":…,"message":…}.
 type wsIn struct {
@@ -59,6 +59,8 @@ func (s *Server) socket(w http.ResponseWriter, r *http.Request, rp *workspace.Re
 	ctx, cancel := context.WithCancel(context.Background())
 	conn := &wsConn{s: s, rp: rp, c: c, ctx: ctx, cancel: cancel, views: map[string]*term.Viewer{}}
 	defer conn.close()
+	s.socks.add(rp.ID, conn)
+	defer s.socks.remove(rp.ID, conn)
 
 	// Git changes. The watch (and its first look at the working tree) starts before "hello": the page
 	// refreshes on hello, so a change made before the first look is in that refresh, and one made after
@@ -331,4 +333,57 @@ func (s *Server) terminals(w http.ResponseWriter, r *http.Request, rp *workspace
 		return
 	}
 	respond(w, map[string]any{"enabled": true, "sessions": s.terms.List(rp.Repo.Path)})
+}
+
+// sockets are the open pages of each folder, for messages every one of them should get.
+type sockets struct {
+	mu    sync.Mutex
+	conns map[string]map[*wsConn]struct{}
+	timer map[string]*time.Timer
+}
+
+func (k *sockets) add(id string, c *wsConn) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.conns == nil {
+		k.conns = map[string]map[*wsConn]struct{}{}
+	}
+	if k.conns[id] == nil {
+		k.conns[id] = map[*wsConn]struct{}{}
+	}
+	k.conns[id][c] = struct{}{}
+}
+
+func (k *sockets) remove(id string, c *wsConn) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.conns[id], c)
+}
+
+// publish sends a message to every page of a folder.
+func (k *sockets) publish(id string, msg map[string]any) {
+	k.mu.Lock()
+	conns := make([]*wsConn, 0, len(k.conns[id]))
+	for c := range k.conns[id] {
+		conns = append(conns, c)
+	}
+	k.mu.Unlock()
+	for _, c := range conns {
+		go c.send(msg)
+	}
+}
+
+// problemsChanged tells a folder's pages that its problems changed (a language server published some),
+// once things settle: a server reports file after file.
+func (s *Server) problemsChanged(id string) {
+	k := &s.socks
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.timer == nil {
+		k.timer = map[string]*time.Timer{}
+	}
+	if t := k.timer[id]; t != nil {
+		t.Stop()
+	}
+	k.timer[id] = time.AfterFunc(300*time.Millisecond, func() { k.publish(id, map[string]any{"t": "problems"}) })
 }

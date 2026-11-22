@@ -14,15 +14,26 @@
     problemsFor,
     syntaxDefinitions,
     wordAt,
+    occurrencesAt,
+    prepareCalls,
+    prepareRename,
+    renameSymbol,
+    codeActions,
+    applyChange,
     type LspMethod,
     type Problem,
     type Target,
+    type Occurrence,
+    type CallItem,
+    type EditPreview,
+    type CodeAction,
   } from "./definition";
   import { lsp } from "./lsp.svelte";
   import Markdown from "./Markdown.svelte";
   import LspStatus from "./LspStatus.svelte";
   import Minimap from "./Minimap.svelte";
   import { fly } from "./motion";
+  import { setHighlight, clearHighlights } from "./highlights";
   import {
     ArrowUpRight,
     Copy,
@@ -44,6 +55,7 @@
     onnotice,
     disk = null,
     onreferences,
+    oncalls,
     startSelect = null,
     restore = null,
   }: {
@@ -56,6 +68,8 @@
     disk?: { path: string; hash: string; exists: boolean; n: number } | null;
     /** Find references to the name at the caret (Shift+F12, the context menu). */
     onreferences?: () => void;
+    /** Show the call hierarchy of the function at the caret (Shift+Alt+H). */
+    oncalls?: (items: CallItem[]) => void;
     /** A match to select on startLine (a search result). */
     startSelect?: { col: number; len: number } | null;
     /** Where this file was left (its tab is shown again). */
@@ -63,6 +77,8 @@
   } = $props();
   export type ViewState = { top: number; left: number; caret: { line: number; col: number }; anchor: { line: number; col: number } | null };
   let updated = $state(0);
+  // This view's own highlights in the page's shared registry (see highlights.ts).
+  const owner = {};
   type Position = { line: number; col: number };
   let viewport = $state<HTMLDivElement>(null!);
   let rows: HTMLDivElement;
@@ -159,6 +175,7 @@
     caretCol = caretPos.col;
     capture();
     onposition?.(current - 1, caretCol, meta?.hash || "");
+    scheduleOccurrences();
     if (reveal) revealCaret();
     if (lineChanged) schedule();
     else drawSelection();
@@ -228,8 +245,7 @@
       } catch {}
     }
     if (registry) {
-      if (ranges.length) registry.set("code-selection", new (window as any).Highlight(...ranges));
-      else registry.delete("code-selection");
+      setHighlight(owner, "code-selection", ranges);
     }
     // The caret: a thin bar where the head is, when its line is on screen.
     const at = point(caretPos);
@@ -359,8 +375,8 @@
     if (!supportsHighlight || !rows) return;
     const registry = (CSS as any).highlights;
     if (!findOpen || !matches.length) {
-      registry.delete("find-match");
-      registry.delete("find-current");
+      setHighlight(owner, "find-match", []);
+      setHighlight(owner, "find-current", []);
       return;
     }
     const first = Number((rows.firstElementChild as HTMLElement | null)?.dataset.line || 0),
@@ -388,8 +404,8 @@
       }
       (i === findIndex ? now : all).push(r);
     }
-    registry.set("find-match", new (window as any).Highlight(...all));
-    registry.set("find-current", new (window as any).Highlight(...now));
+    setHighlight(owner, "find-match", all);
+    setHighlight(owner, "find-current", now);
   }
   /** Opens find, seeded with the selection (one line) or the name at the caret. */
   export function find() {
@@ -646,6 +662,7 @@
     rows.style.transform = `translateY(${from * LH}px)`;
     rows.replaceChildren(...list);
     squiggle(from + 1, to);
+    drawOccurrences();
     drawSelection();
     drawFind();
   }
@@ -810,6 +827,26 @@
     }
   }
   function key(event: KeyboardEvent) {
+    if (event.key === "F2") {
+      event.preventDefault();
+      void startRename();
+      return;
+    }
+    if (event.code === "KeyH" && event.shiftKey && event.altKey) {
+      event.preventDefault();
+      void callHierarchy();
+      return;
+    }
+    if (event.ctrlKey && event.key === ".") {
+      event.preventDefault();
+      void quickFix();
+      return;
+    }
+    if (event.key === "Escape" && (actions || changePreview)) {
+      actions = null;
+      changePreview = null;
+      return;
+    }
     if (event.key === "F12") {
       event.preventDefault();
       if (event.shiftKey) onreferences?.();
@@ -953,14 +990,14 @@
   function underline(w: typeof hovered) {
     if (!supportsHighlight) return;
     const registry = (CSS as any).highlights;
-    if (!w) return registry.delete("definition-link");
+    if (!w) return setHighlight(owner, "definition-link", []);
     const a = point({ line: w.line, col: w.start }),
       b = point({ line: w.line, col: w.end });
     if (!a || !b) return;
     const range = document.createRange();
     range.setStart(a[0], a[1]);
     range.setEnd(b[0], b[1]);
-    registry.set("definition-link", new (window as any).Highlight(range));
+    setHighlight(owner, "definition-link", [range]);
   }
   function unhover() {
     hovered = null;
@@ -1038,6 +1075,181 @@
     void goToDefinition(w, { x: (box?.left ?? 0) + 80, y: box?.bottom ?? 0 }, method);
   }
 
+  // Occurrences: the name at the caret, marked wherever it appears on screen; the language server tells
+  // reads from writes (and knows a name from a same-spelt other one). Without one, the same word.
+  let occurrences: Occurrence[] = [],
+    occWord = "",
+    occTimer: ReturnType<typeof setTimeout> | undefined;
+  async function usable() {
+    return lspUsable(lspStateFor(path, await lspStatus()).state);
+  }
+  function scheduleOccurrences() {
+    clearTimeout(occTimer);
+    occTimer = setTimeout(() => void updateOccurrences(), 160);
+  }
+  async function updateOccurrences() {
+    const w = selected ? null : caretWord();
+    const gen = generation,
+      hash = meta?.hash || "";
+    if (!w) {
+      occurrences = [];
+      occWord = "";
+      return drawOccurrences();
+    }
+    let found: Occurrence[] = [];
+    if (hash && (await usable())) {
+      try {
+        found = await occurrencesAt(path, w.line - 1, w.start, hash);
+      } catch {}
+    }
+    if (gen !== generation || destroyed) return;
+    const now = selected ? null : caretWord();
+    if (!now || now.line !== w.line || now.start !== w.start) return; // the caret moved on meanwhile
+    occurrences = found;
+    occWord = found.length ? "" : w.word;
+    drawOccurrences();
+  }
+  function drawOccurrences() {
+    if (!supportsHighlight || !rows) return;
+    const sets: Record<string, Range[]> = { "occ-text": [], "occ-read": [], "occ-write": [] };
+    const add = (line: number, start: number, end: number, kind: number) => {
+      const a = point({ line, col: start }),
+        b = point({ line, col: end });
+      if (!a || !b) return;
+      const r = document.createRange();
+      try {
+        r.setStart(a[0], a[1]);
+        r.setEnd(b[0], b[1]);
+        sets[kind === 3 ? "occ-write" : kind === 2 ? "occ-read" : "occ-text"].push(r);
+      } catch {}
+    };
+    const first = Number((rows.firstElementChild as HTMLElement | null)?.dataset.line || 0),
+      last = Number((rows.lastElementChild as HTMLElement | null)?.dataset.line || 0);
+    for (const o of occurrences)
+      if (o.line >= first && o.line <= last) add(o.line, o.start, Math.min(o.end, (lineText(o.line) ?? "").length), o.kind);
+    if (occWord && first) {
+      const re = new RegExp(`(?<![\\w$])${occWord.replace(/[$]/g, "\\$")}(?![\\w$])`, "g");
+      for (let line = first; line <= last; line++) {
+        const text = lineText(line);
+        if (text) for (const m of text.matchAll(re)) add(line, m.index!, m.index! + occWord.length, 1);
+      }
+    }
+    for (const [name, ranges] of Object.entries(sets)) setHighlight(owner, name, ranges);
+  }
+
+  // Rename (F2), quick fixes (Ctrl+.) and the call hierarchy (Shift+Alt+H), from the language server. A
+  // rename is shown before anything changes; the files are then written by Falcon, hash-checked.
+  let renaming = $state<{ line: number; start: number; x: number; y: number; value: string; original: string } | null>(null),
+    renameBusy = $state(false),
+    changePreview = $state<{ title: string; preview: EditPreview[]; token: string } | null>(null),
+    actions = $state<{ x: number; y: number; list: CodeAction[] } | null>(null);
+  const previewCount = $derived(changePreview ? changePreview.preview.reduce((n, f) => n + Math.max(1, f.changes.length), 0) : 0);
+  function rectAt(p: Position) {
+    const a = point(p);
+    if (!a) return null;
+    const r = document.createRange();
+    try {
+      r.setStart(a[0], a[1]);
+      r.setEnd(a[0], a[1]);
+    } catch {
+      return null;
+    }
+    return r.getBoundingClientRect();
+  }
+  function focusSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+  export async function startRename() {
+    const w = caretWord();
+    if (!w || !meta) return onnotice?.("Place the caret on a name first");
+    if (!(await usable())) return onnotice?.("Renaming needs the language server for this file");
+    try {
+      const at = await prepareRename(path, w.line - 1, w.start, meta.hash);
+      if (!at) return onnotice?.(`${w.word} cannot be renamed`);
+      const line = at.default ? w.line : at.line,
+        start = at.default ? w.start : at.start;
+      const name = at.default ? w.word : at.placeholder || w.word;
+      const box = rectAt({ line, col: start });
+      if (!box) return;
+      renaming = { line, start, x: box.left - 4, y: box.top - 4, value: name, original: name };
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    }
+  }
+  async function submitRename() {
+    if (!renaming || !meta) return;
+    const r = renaming,
+      name = r.value.trim();
+    if (!name || name === r.original) {
+      renaming = null;
+      viewport.focus();
+      return;
+    }
+    renameBusy = true;
+    try {
+      const { preview, token } = await renameSymbol(path, r.line - 1, r.start, meta.hash, name);
+      renaming = null;
+      changePreview = { title: `Rename ${r.original} to ${name}`, preview, token };
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    } finally {
+      renameBusy = false;
+    }
+  }
+  async function applyPreview() {
+    if (!changePreview) return;
+    const c = changePreview;
+    changePreview = null;
+    try {
+      const changed = await applyChange(c.token);
+      onnotice?.(`${c.title}: ${changed.length} file${changed.length === 1 ? "" : "s"} changed`);
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    }
+    viewport.focus();
+  }
+  export async function quickFix() {
+    if (!meta) return;
+    if (!(await usable())) return onnotice?.("Quick fixes need the language server for this file");
+    let a = caretPos,
+      f = caretPos;
+    if (selected) {
+      a = before(selected.a, selected.f) ? selected.a : selected.f;
+      f = a === selected.a ? selected.f : selected.a;
+    }
+    try {
+      const list = await codeActions(path, a.line - 1, a.col, f.line - 1, f.col, meta.hash);
+      if (!list.length) return onnotice?.("No quick fixes or refactorings here");
+      const box = rectAt(caretPos) || rows.querySelector(`[data-line="${current}"]`)?.getBoundingClientRect();
+      actions = { x: box?.left ?? 80, y: (box?.bottom ?? 80) + 4, list };
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    }
+  }
+  async function runAction(a: CodeAction) {
+    actions = null;
+    try {
+      const changed = await applyChange(a.token);
+      onnotice?.(changed.length ? `${a.title}: ${changed.length} file${changed.length === 1 ? "" : "s"} changed` : a.title);
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    }
+    viewport.focus();
+  }
+  export async function callHierarchy() {
+    const w = caretWord();
+    if (!w || !meta) return onnotice?.("Place the caret on a name first");
+    if (!(await usable())) return onnotice?.("The call hierarchy needs the language server for this file");
+    try {
+      const items = await prepareCalls(path, w.line - 1, w.start, meta.hash);
+      if (!items.length) return onnotice?.(`No call hierarchy for ${w.word}`);
+      oncalls?.(items);
+    } catch (e) {
+      onnotice?.((e as Error).message);
+    }
+  }
+
   // Problems: what the language server reports for this file, marked in the gutter and under the text,
   // listed from the status bar, stepped through with F8.
   let problems = $state<Problem[]>([]),
@@ -1100,8 +1312,7 @@
       } catch {}
     }
     for (const [severity, ranges] of Object.entries(sets)) {
-      if (ranges.length) registry.set("lsp-" + severity, new (window as any).Highlight(...ranges));
-      else registry.delete("lsp-" + severity);
+      setHighlight(owner, "lsp-" + severity, ranges);
     }
   }
   function nextProblem(step: 1 | -1) {
@@ -1220,6 +1431,8 @@
       resize.disconnect();
       cancelAnimationFrame(raf);
       chunks.clear();
+      clearTimeout(occTimer);
+      clearHighlights(owner);
     };
   });
 </script>
@@ -1229,6 +1442,7 @@
     const t = e.target as Element;
     if (menu && !t.closest?.(".code-menu")) menu = null;
     if (problemList && !t.closest?.(".problem-list, .problem-count")) problemList = false;
+    if (actions && !t.closest?.(".code-actions")) actions = null;
   }}
 />
 <div class="code-viewer">
@@ -1354,7 +1568,67 @@
       <button role="menuitem" onclick={() => act(() => lookAtCaret("textDocument/typeDefinition"))}><span>Go to type definition</span></button>
       <button role="menuitem" onclick={() => act(() => lookAtCaret("textDocument/implementation"))}><span>Go to implementations</span><kbd>Ctrl+F12</kbd></button>
       <button role="menuitem" onclick={() => act(() => onreferences?.())}><span>Find all references</span><kbd>Shift+F12</kbd></button>
+      <button role="menuitem" onclick={() => act(() => void callHierarchy())}><span>Show call hierarchy</span><kbd>Shift+Alt+H</kbd></button>
+      <hr />
+      <button role="menuitem" onclick={() => act(() => void startRename())}><span>Rename symbol</span><kbd>F2</kbd></button>
+      <button role="menuitem" onclick={() => act(() => void quickFix())}><span>Quick fix…</span><kbd>Ctrl+.</kbd></button>
+      <hr />
       <button role="menuitem" onclick={() => act(() => void anchor())}><span>Copy path and line</span><kbd>Alt+E</kbd></button>
+    </div>{/if}
+  {#if renaming}<input
+      class="rename-box"
+      style:left="{renaming.x}px"
+      style:top="{renaming.y}px"
+      bind:value={renaming.value}
+      use:focusSelect
+      disabled={renameBusy}
+      aria-label="New name"
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void submitRename();
+        } else if (e.key === "Escape") {
+          renaming = null;
+          viewport.focus();
+        }
+      }}
+      onblur={() => {
+        if (!renameBusy) renaming = null;
+      }}
+    />{/if}
+  {#if actions}<div class="def-picker code-actions" role="menu" tabindex="-1" style:left="{Math.min(actions.x, innerWidth - 420)}px" style:top="{Math.min(actions.y, innerHeight - 260)}px" in:fly={{ y: 4, duration: 100 }}
+      onkeydown={(e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const items = [...(e.currentTarget as HTMLElement).querySelectorAll("button")];
+          const i = items.indexOf(document.activeElement as HTMLButtonElement);
+          items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+        } else if (e.key === "Escape") {
+          actions = null;
+          viewport.focus();
+        }
+      }}>
+      <div class="def-picker-head">Quick fixes and refactorings</div>
+      {#each actions.list as a, i}<button role="menuitem" use:focusFirst={i === 0} onclick={() => runAction(a)}
+          ><span>{a.title}</span>{#if a.kind}<kbd>{a.kind.split(".")[0]}</kbd>{/if}</button
+        >{/each}
+    </div>{/if}
+  {#if changePreview}<!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="change-backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && (changePreview = null)}>
+      <div class="change-preview" role="dialog" aria-modal="true" aria-label={changePreview.title}>
+        <header><b>{changePreview.title}</b><span>{previewCount} change{previewCount === 1 ? "" : "s"} in {changePreview.preview.length} file{changePreview.preview.length === 1 ? "" : "s"}</span></header>
+        <div class="change-files">
+          {#each changePreview.preview as f}<section>
+              <h4>{f.path}{#if f.renamed}<span> → {f.renamed}</span>{/if}{#if f.created}<span> (new file)</span>{/if}</h4>
+              {#each f.changes as c}<div class="change-row"><span>{c.line}</span><code class="before">{c.before}</code><code class="after">{c.after}</code></div>{/each}
+            </section>{/each}
+        </div>
+        <footer>
+          <button class="button" onclick={() => { changePreview = null; viewport.focus(); }}>Cancel</button>
+          <button class="button primary" use:focusFirst={true} onclick={applyPreview}>Apply</button>
+        </footer>
+      </div>
     </div>{/if}
   {#if problemList}<div class="def-picker problem-list" role="listbox" tabindex="-1" style:right="16px" style:bottom="44px" in:fly={{ y: 4, duration: 120 }}>
       <div class="def-picker-head">{problems.length} problem{problems.length === 1 ? "" : "s"} in this file{checking ? " · checking…" : ""}</div>
@@ -1524,6 +1798,104 @@
   }
   .code-viewport.finding {
     cursor: progress;
+  }
+  :global(::highlight(occ-text)),
+  :global(::highlight(occ-read)) {
+    background-color: color-mix(in srgb, var(--text) 16%, transparent);
+  }
+  :global(::highlight(occ-write)) {
+    background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .rename-box {
+    position: fixed;
+    z-index: 60;
+    min-width: 180px;
+    padding: 3px 6px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    background: var(--input, var(--surface-raised));
+    color: var(--bright);
+    font: 13px var(--font-mono);
+    box-shadow: 0 8px 24px var(--shadow);
+    outline: none;
+  }
+  .code-menu hr {
+    margin: 4px 2px;
+    border: 0;
+    border-top: 1px solid var(--line);
+  }
+  .change-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: color-mix(in srgb, var(--bg, #000) 55%, transparent);
+  }
+  .change-preview {
+    display: flex;
+    flex-direction: column;
+    width: min(860px, 100%);
+    max-height: min(640px, 90vh);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--surface-raised);
+    box-shadow: 0 24px 60px var(--shadow);
+  }
+  .change-preview header,
+  .change-preview footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  .change-preview header {
+    border-bottom: 1px solid var(--line);
+  }
+  .change-preview header span {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .change-preview footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--line);
+  }
+  .change-files {
+    overflow: auto;
+    padding: 6px 0;
+  }
+  .change-files h4 {
+    margin: 8px 14px 4px;
+    color: var(--bright);
+    font: 600 12px var(--font-ui);
+  }
+  .change-files h4 span {
+    color: var(--muted);
+    font-weight: 400;
+  }
+  .change-row {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    font: 12px/1.6 var(--font-mono);
+  }
+  .change-row span {
+    grid-row: span 2;
+    padding-right: 8px;
+    color: var(--subtle);
+    text-align: right;
+  }
+  .change-row code {
+    overflow: hidden;
+    padding: 0 8px;
+    white-space: pre;
+    text-overflow: ellipsis;
+  }
+  .change-row .before {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+  }
+  .change-row .after {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
   }
   :global(::highlight(lsp-error)) {
     text-decoration: underline wavy var(--danger);

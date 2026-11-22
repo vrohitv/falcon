@@ -38,6 +38,8 @@ type Client struct {
 	home         string
 	root         string
 	settings     map[string]any
+	applyEdit    func(json.RawMessage) error
+	onDiag       func()
 	closeOnce    sync.Once
 	Capabilities json.RawMessage
 	// Work the server says it is doing ($/progress tokens begun and not ended), and whether it says it is
@@ -60,6 +62,11 @@ type Options struct {
 	// Settings answer the server's workspace/configuration requests, by section ("rust-analyzer",
 	// "python.analysis"); a section not given is answered with null (the server's defaults).
 	Settings map[string]any
+	// ApplyEdit makes an edit the server asks for (workspace/applyEdit, sent while running a command);
+	// nil refuses them.
+	ApplyEdit func(edit json.RawMessage) error
+	// OnDiagnostics is told (off the reading loop) whenever the server publishes problems.
+	OnDiagnostics func()
 }
 
 // URI is a file path as a file: URI (a Windows path C:\x becomes file:///C:/x).
@@ -91,16 +98,27 @@ var clientCapabilities = map[string]any{
 	"window":  map[string]any{"workDoneProgress": true},
 	// Falcon watches the folder and reports changes on disk (a branch switch, a terminal, a build) with
 	// workspace/didChangeWatchedFiles, so a server's picture of the whole repository stays current.
-	"workspace": map[string]any{"configuration": true, "workspaceFolders": true,
+	// Edits (a rename, a quick fix) are applied by Falcon, hash-checked, inside the folder; creating and
+	// renaming files is allowed, deleting is not.
+	"workspace": map[string]any{"configuration": true, "workspaceFolders": true, "applyEdit": true,
+		"workspaceEdit":         map[string]any{"documentChanges": true, "resourceOperations": []string{"create", "rename"}, "failureHandling": "abort"},
+		"symbol":                map[string]any{},
+		"executeCommand":        map[string]any{},
 		"didChangeWatchedFiles": map[string]any{"dynamicRegistration": true, "relativePatternSupport": true}},
 	"textDocument": map[string]any{
-		"synchronization":    map[string]any{"dynamicRegistration": false, "didSave": true},
-		"hover":              map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
-		"definition":         map[string]any{"linkSupport": true},
-		"declaration":        map[string]any{"linkSupport": true},
-		"typeDefinition":     map[string]any{"linkSupport": true},
-		"implementation":     map[string]any{"linkSupport": true},
-		"references":         map[string]any{},
+		"synchronization":   map[string]any{"dynamicRegistration": false, "didSave": true},
+		"hover":             map[string]any{"contentFormat": []string{"markdown", "plaintext"}},
+		"definition":        map[string]any{"linkSupport": true},
+		"declaration":       map[string]any{"linkSupport": true},
+		"typeDefinition":    map[string]any{"linkSupport": true},
+		"implementation":    map[string]any{"linkSupport": true},
+		"references":        map[string]any{},
+		"documentHighlight": map[string]any{},
+		"callHierarchy":     map[string]any{},
+		"rename":            map[string]any{"prepareSupport": true},
+		"codeAction": map[string]any{
+			"codeActionLiteralSupport": map[string]any{"codeActionKind": map[string]any{"valueSet": []string{"", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"}}},
+			"isPreferredSupport":       true, "dataSupport": true, "resolveSupport": map[string]any{"properties": []string{"edit"}}},
 		"documentSymbol":     map[string]any{"hierarchicalDocumentSymbolSupport": true},
 		"publishDiagnostics": map[string]any{"relatedInformation": true, "versionSupport": true},
 		"diagnostic":         map[string]any{"dynamicRegistration": false, "relatedDocumentSupport": false},
@@ -138,7 +156,7 @@ func StartWith(ctx context.Context, o Options) (*Client, error) {
 		os.RemoveAll(home)
 		return nil, err
 	}
-	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, root: root, settings: o.Settings, progress: map[string]string{}, diagAt: map[string]time.Time{}}
+	c := &Client{cmd: cmd, stdin: stdin, pending: map[int64]chan response{}, diagnostics: map[string]json.RawMessage{}, versions: map[string]int{}, done: make(chan struct{}), home: home, root: root, settings: o.Settings, applyEdit: o.ApplyEdit, onDiag: o.OnDiagnostics, progress: map[string]string{}, diagAt: map[string]time.Time{}}
 	go c.read(stdout)
 	timeout := o.InitTimeout
 	if timeout == 0 {
@@ -266,7 +284,25 @@ func (c *Client) read(reader io.Reader) {
 					}
 					result = answers
 				case "workspace/applyEdit":
-					result = map[string]any{"applied": false, "failureReason": "Edits must pass through the repository broker"}
+					if c.applyEdit == nil {
+						result = map[string]any{"applied": false, "failureReason": "this client does not apply edits"}
+						break
+					}
+					// Answered when done, off the reading loop: applying it tells this server about the
+					// files changed, which must not wait behind the loop.
+					var p struct {
+						Edit json.RawMessage `json:"edit"`
+					}
+					_ = json.Unmarshal(msg.Params, &p)
+					id := msg.ID
+					go func() {
+						out := map[string]any{"applied": true}
+						if err := c.applyEdit(p.Edit); err != nil {
+							out = map[string]any{"applied": false, "failureReason": err.Error()}
+						}
+						_ = c.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": out})
+					}()
+					continue
 				case "workspace/workspaceFolders":
 					result = []any{map[string]string{"uri": URI(c.root), "name": filepath.Base(c.root)}}
 				}
@@ -308,6 +344,9 @@ func (c *Client) notice(method string, params json.RawMessage) {
 		if json.Unmarshal(params, &p) == nil {
 			c.diagnostics[p.URI] = params
 			c.diagAt[p.URI] = time.Now()
+			if c.onDiag != nil {
+				go c.onDiag()
+			}
 		}
 	case "$/progress":
 		var p struct {
@@ -456,6 +495,17 @@ func section(settings map[string]any, name string) any {
 		}
 	}
 	return cur
+}
+
+// AllDiagnostics are the problems the server has reported, for every file it has reported on.
+func (c *Client) AllDiagnostics() map[string]json.RawMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]json.RawMessage, len(c.diagnostics))
+	for uri, d := range c.diagnostics {
+		out[uri] = d
+	}
+	return out
 }
 
 func (c *Client) Diagnostics(uri string) json.RawMessage {

@@ -12,6 +12,7 @@
   import EditorGroup, { type GroupState, type DropTarget } from "./EditorGroup.svelte";
   import FileTree from "./FileTree.svelte";
   import SearchPanel from "./SearchPanel.svelte";
+  import ProblemsPanel from "./ProblemsPanel.svelte";
   import type { TreeFile } from "./file-tree";
   import { isExternal } from "./definition";
   import { fade, slide } from "./motion";
@@ -30,7 +31,7 @@
     repoID: string;
     repoName: string;
     /** Which sidebar pane shows; "" hides the sidebar. */
-    side?: "explorer" | "search" | "";
+    side?: "explorer" | "search" | "problems" | "";
     initialPath?: string;
     initialLine?: number;
     onerror: (message: string) => void;
@@ -455,6 +456,7 @@
   {#if filesOpen}<div class="drawer-scrim" role="presentation" onclick={() => (filesOpen = false)} transition:fade={{ duration: 140 }}></div>{/if}
   {#if side}<aside class="file-sidebar" class:open={filesOpen} bind:this={treePane} style:--tree-width={treeWidth ? treeWidth + "px" : null}>
       {#if side === "search"}<SearchPanel onopen={(path, at, col, len) => openFile(path, at, col, len)} {onerror} />
+      {:else if side === "problems"}<ProblemsPanel onopen={(path, line, col) => openFile(path, line, col, 0)} />
       {:else}<div class="section-label">
           Explorer<span class="explorer-actions"
             ><button
