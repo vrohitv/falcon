@@ -1,76 +1,29 @@
 <script lang="ts">
-  // File and folder icons from the same line-icon family as the rest of Falcon, tinted by language or kind
-  // with colours that follow the theme.
-  import {
-    File,
-    FileCode,
-    FileText,
-    FileImage,
-    FilePlay,
-    FileMusic,
-    FileArchive,
-    FileLock,
-    FileTerminal,
-    FileCog,
-    FileSpreadsheet,
-    FileType,
-    FileBraces,
-    FileKey,
-    FileBox,
-    FileDigit,
-    FlaskConical,
-    Database,
-    Package,
-    Container,
-    Hammer,
-    Scale,
-    BookOpen,
-    Palette,
-    GitBranch,
-    Folder,
-    FolderOpen,
-    FolderGit,
-    FolderCode,
-    FolderCog,
-    FolderCheck,
-    FolderOpenDot,
-    FileChartColumn,
-  } from "@lucide/svelte";
-  import { kindOf, folderKind } from "./file-kind";
+  // File icons as in VS Code's default theme: the Seti icon font, one glyph per language or kind of
+  // file, in its colours (one set for dark themes, one for light). A glyph is a character, so a tree of
+  // thousands of files costs no SVGs. Folders keep Falcon's line icons, tinted by kind.
+  import { Folder, FolderOpen, FolderGit, FolderCode, FolderCog, FolderCheck, FolderOpenDot } from "@lucide/svelte";
+  import { folderKind } from "./file-kind";
+  import { glyphs, byName, byExtension, fallback } from "./seti-icons";
+
+  /** The Seti glyph for a file: by its name, else its longest known extension, else the plain file. */
+  function seti(path: string): string {
+    const base = (path.split("/").pop() || "").toLowerCase();
+    if (byName[base]) return byName[base];
+    const parts = base.split(".");
+    for (let i = 1; i < parts.length; i++) {
+      const hit = byExtension[parts.slice(i).join(".")];
+      if (hit) return hit;
+    }
+    return fallback;
+  }
   let {
     path,
     size = 16,
     folder = false,
     open = false,
   }: { path: string; size?: number; folder?: boolean; open?: boolean } = $props();
-  const icons: Record<string, typeof File> = {
-    file: File,
-    code: FileCode,
-    text: FileText,
-    markdown: FileText,
-    readme: BookOpen,
-    image: FileImage,
-    video: FilePlay,
-    audio: FileMusic,
-    archive: FileArchive,
-    lock: FileLock,
-    terminal: FileTerminal,
-    config: FileCog,
-    table: FileSpreadsheet,
-    font: FileType,
-    braces: FileBraces,
-    key: FileKey,
-    binary: FileBox,
-    pdf: FileChartColumn,
-    digit: FileDigit,
-    test: FlaskConical,
-    database: Database,
-    package: Package,
-    container: Container,
-    hammer: Hammer,
-    license: Scale,
-    palette: Palette,
-    git: GitBranch,
+  const icons: Record<string, typeof Folder> = {
     folder: Folder,
     "folder-open": FolderOpen,
     "folder-git": FolderGit,
@@ -80,21 +33,49 @@
     "folder-docs": FolderOpenDot,
   };
   const kind = $derived.by(() => {
-    if (folder) {
-      const f = folderKind(path);
-      return { icon: open && f.icon === "folder" ? "folder-open" : f.icon, tint: f.tint };
-    }
-    const k = kindOf(path);
-    return { icon: k.icon, tint: k.tint };
+    const f = folderKind(path);
+    return { icon: open && f.icon === "folder" ? "folder-open" : f.icon, tint: f.tint };
   });
-  const Icon = $derived(icons[kind.icon] || File);
+  const Icon = $derived(icons[kind.icon] || Folder);
+  const glyph = $derived(folder ? "" : seti(path));
+  const g = $derived(glyph ? glyphs[glyph] || glyphs[fallback] : null);
 </script>
 
-<span class="file-type-icon" data-tint={kind.tint} data-icon={kind.icon} style:width="{size}px" style:height="{size}px" aria-hidden="true"
-  ><Icon size={size} strokeWidth={1.75} /></span
->
+{#if g}<span
+    class="file-type-icon seti"
+    data-icon={glyph}
+    style:width="{size}px"
+    style:height="{size}px"
+    style:font-size="{Math.round(size * 1.3)}px"
+    style:--seti-dark={g[1]}
+    style:--seti-light={g[2]}
+    aria-hidden="true">{g[0]}</span
+  >{:else}<span class="file-type-icon" data-tint={kind.tint} data-icon={kind.icon} style:width="{size}px" style:height="{size}px" aria-hidden="true"
+    ><Icon size={size} strokeWidth={1.75} /></span
+  >{/if}
 
 <style>
+  @font-face {
+    font-family: "falcon-seti";
+    src: url("./assets/seti/seti.woff") format("woff");
+    font-display: block;
+  }
+  .file-type-icon.seti {
+    overflow: hidden;
+    color: var(--seti-dark);
+    font-family: "falcon-seti";
+    font-style: normal;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  :global(:root[data-theme="light"]) .file-type-icon.seti {
+    color: var(--seti-light);
+  }
+  @media (prefers-color-scheme: light) {
+    :global(:root:not([data-theme="dark"])) .file-type-icon.seti {
+      color: var(--seti-light);
+    }
+  }
   .file-type-icon {
     display: inline-grid;
     place-items: center;

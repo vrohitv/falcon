@@ -112,19 +112,29 @@ test.describe("viewers", () => {
 });
 
 test.describe("icons and themes", () => {
-  test("file icons are tinted line icons, no image requests", async ({ page }) => {
+  test("file icons are VS Code's Seti glyphs (a font, no images); folders are line icons", async ({ page }) => {
     const done = watch(page);
-    const icons: string[] = [];
-    page.on("request", (r) => r.url().includes("file-icons") && icons.push(r.url()));
+    const images: string[] = [];
+    page.on("request", (r) => /\.(svg|png)$/.test(new URL(r.url()).pathname) && r.url().includes("icon") && images.push(r.url()));
     const id = await gammaID(page);
     await page.goto(`/r/${id}/`);
     await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+    // A file name wins (README is "info"), then the extension (csv), each in its own colour.
     const readme = page.getByRole("treeitem", { name: "README.md" }).locator(".file-type-icon");
-    await expect(readme).toHaveAttribute("data-icon", "readme");
-    await expect(page.getByRole("treeitem", { name: "data.csv" }).locator(".file-type-icon")).toHaveAttribute("data-icon", "table");
+    await expect(readme).toHaveAttribute("data-icon", "info");
+    await expect(page.getByRole("treeitem", { name: "data.csv" }).locator(".file-type-icon")).toHaveAttribute("data-icon", "csv");
+    expect(await readme.evaluate((e) => getComputedStyle(e).fontFamily)).toContain("falcon-seti");
+    const colour = (name: string) => page.getByRole("treeitem", { name }).locator(".file-type-icon").evaluate((e) => getComputedStyle(e).color);
+    expect(await colour("README.md")).not.toBe(await colour("data.csv"));
+    // Seti's own colours (dark theme): csv is green, README blue; not the plain text colour.
+    await page.emulateMedia({ colorScheme: "dark" });
+    expect(await colour("data.csv")).toBe("rgb(141, 193, 73)");
+    expect(await colour("README.md")).toBe("rgb(81, 154, 186)");
+    // The font is loaded (the glyphs are drawn, not boxes).
+    await expect.poll(() => page.evaluate(() => document.fonts.check('16px "falcon-seti"', "\ue001"))).toBe(true);
     await expect(page.getByRole("treeitem", { name: "assets" }).locator(".file-type-icon svg")).toBeVisible();
     expect(await page.locator(".file-sidebar img").count()).toBe(0);
-    expect(icons).toEqual([]);
+    expect(images).toEqual([]);
     done();
   });
 

@@ -187,3 +187,6 @@ make e2e     # browser: folders per tab, navigation, search, editing, viewers, d
 ## Licence
 
 MIT
+
+File icons are the Seti icon font and its file-type mapping from Visual Studio Code (both MIT); the
+font and their licences are in `web/src/assets/seti`.
