@@ -155,7 +155,100 @@ func TestTextIndexIsSavedAndReloaded(t *testing.T) {
 	if !ok || strings.Join(got, ",") != "a.txt,b.txt" {
 		t.Fatalf("after reload: %v %v", got, ok)
 	}
-	if p := pack([]uint32{3, 70, 70000}); fmt.Sprint(unpack(p)) != "[3 70 70000]" {
-		t.Fatal("pack/unpack")
+	if b := encode(nil, []int32{0, 3, 70, 70000}); fmt.Sprint(decode(nil, b)) != "[0 3 70 70000]" {
+		t.Fatal("encode/decode")
+	}
+	if got := intersectEncoded([]int32{1, 3, 5, 70, 9000}, encode(nil, []int32{3, 4, 70, 71, 9000})); fmt.Sprint(got) != "[3 70 9000]" {
+		t.Fatalf("intersectEncoded: %v", got)
+	}
+}
+
+// A rebuild starts from the previous index: after edits, new files and deletions, the rebuilt index
+// answers exactly as one built from scratch would (never missing a match, and no stale candidate for a
+// file that lost the text or is gone).
+func TestIncrementalRebuildEqualsAFreshBuild(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	words := []string{"alpha", "beta", "gamma", "delta", "handle", "token", "cache", "server", "render", "index"}
+	text := func() string {
+		var b strings.Builder
+		for i := 0; i < 30; i++ {
+			b.WriteString(words[rng.Intn(len(words))])
+			b.WriteString(fmt.Sprint(rng.Intn(30)))
+			b.WriteByte(' ')
+		}
+		return b.String() + "\n"
+	}
+	files := map[string]string{}
+	for i := 0; i < 200; i++ {
+		files[fmt.Sprintf("p%d/f%03d.txt", i%9, i)] = text()
+	}
+	r := repo(t, files)
+	x := New(r, "")
+	waitText(t, x)
+	ctx := context.Background()
+	answer := func(ix *Index, q string) []string {
+		got, ok := ix.Candidates(ctx, q)
+		if !ok {
+			t.Fatalf("index not usable for %q", q)
+		}
+		return got
+	}
+	queries := []string{"alpha1", "beta22", "handle7", "token", "cache29", "server3 ", "zzz", "newword"}
+	for round := 0; round < 8; round++ {
+		// Change a fifth of the files, add some, delete some.
+		paths := make([]string, 0, len(files))
+		for p := range files {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			switch rng.Intn(10) {
+			case 0, 1:
+				files[p] = text()
+				if rng.Intn(3) == 0 {
+					files[p] += "newword" + fmt.Sprint(round)
+				}
+				os.WriteFile(filepath.Join(r.Path, p), []byte(files[p]), 0o644)
+			case 2:
+				delete(files, p)
+				os.Remove(filepath.Join(r.Path, p))
+			}
+		}
+		for i := 0; i < 10; i++ {
+			p := fmt.Sprintf("n%d/new%d_%d.txt", i%3, round, i)
+			files[p] = text()
+			os.MkdirAll(filepath.Dir(filepath.Join(r.Path, p)), 0o755)
+			os.WriteFile(filepath.Join(r.Path, p), []byte(files[p]), 0o644)
+		}
+		time.Sleep(10 * time.Millisecond)
+		// The incremental rebuild.
+		x.mu.Lock()
+		x.dirty = true
+		x.mu.Unlock()
+		fs, err := x.Fresh(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list := make([]string, len(fs))
+		for i, f := range fs {
+			list[i] = f.Path
+		}
+		x.syncText(ctx, list, true)
+		x.text.mu.Lock()
+		pending := len(x.text.pending)
+		x.text.mu.Unlock()
+		if pending != 0 {
+			t.Fatalf("round %d: %d files still pending after the rebuild", round, pending)
+		}
+		// A fresh index over the same files.
+		fresh := New(r, "")
+		waitText(t, fresh)
+		for _, q := range queries {
+			got, want := answer(x, q), answer(fresh, q)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("round %d, %q: incremental %v\nfresh %v", round, q, got, want)
+			}
+			superset(t, got, matches(t, r.Path, list, q), q)
+		}
 	}
 }
