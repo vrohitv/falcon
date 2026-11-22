@@ -69,6 +69,8 @@ falcon ~/code/app ~/code/api      # then open http://127.0.0.1:7700
 
 Falcon is one program you build yourself in a minute. You need [Go](https://go.dev/dl/) 1.26 or newer
 to build it and [Git](https://git-scm.com/) to run it; the UI is prebuilt in `web/dist`, so nothing else.
+Build with Go's latest patch release: fixes to Go's own HTTP server reach Falcon only when you rebuild
+with them.
 
 **Windows** (PowerShell):
 

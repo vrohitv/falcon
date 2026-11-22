@@ -4,8 +4,11 @@ go 1.26.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/coder/websocket v1.8.15
+	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-git/v5 v5.19.3
+	golang.org/x/sys v0.50.0
 )
 
 require (
@@ -13,8 +16,6 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
@@ -29,6 +30,5 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/net v0.63.0 // indirect
-	golang.org/x/sys v0.50.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )

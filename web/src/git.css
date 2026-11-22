@@ -235,26 +235,11 @@
   flex-shrink: 0;
   color: var(--muted);
 }
-.git-diff {
-  overflow: auto;
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  font: 11px/22px var(--font-mono);
-}
-.git-diff-row,
-.git-hunk {
+.git-diff-row {
   height: 22px;
   display: flex;
   align-items: stretch;
   white-space: pre;
-}
-.git-hunk {
-  background: var(--hunk-bg);
-  color: var(--hunk-fg);
-  padding-left: 12px;
-  font-size: 10px;
-  overflow: hidden;
 }
 .git-diff-row.add {
   background: var(--add-bg);
@@ -400,9 +385,6 @@
     min-height: 350px;
     overflow: visible;
   }
-.git-diff {
-    min-height: 250px;
-  }
 .git-toolbar > code {
     display: none;
   }
@@ -546,17 +528,6 @@
   font-size: 10px;
   color: var(--muted);
 }
-.git-hunk {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.git-hunk > span:first-child {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .git-hunk-actions {
   position: sticky;
   right: 8px;
@@ -565,7 +536,6 @@
   opacity: 0.55;
   transition: opacity 120ms ease;
 }
-.git-hunk:hover .git-hunk-actions,
 .git-hunk-actions:focus-within {
   opacity: 1;
 }

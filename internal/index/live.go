@@ -343,14 +343,14 @@ func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[strin
 		next[p] = f
 	}
 	gone := []string{}
-	changed := false
+	changed, pathsChanged := false, false
 	for _, p := range c.Paths {
 		info, err := os.Lstat(filepath.Join(x.repo.Path, filepath.FromSlash(p)))
 		switch {
 		case err != nil:
 			if _, ok := next[p]; ok {
 				delete(next, p)
-				changed = true
+				changed, pathsChanged = true, true
 			}
 			gone = append(gone, p+"/")
 		case info.IsDir():
@@ -359,7 +359,7 @@ func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[strin
 					for _, f := range fs {
 						next[f.Path] = f
 					}
-					changed = true
+					changed, pathsChanged = true, true
 				}
 			}
 		default:
@@ -367,9 +367,10 @@ func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[strin
 			if prev, had := next[p]; ok && (!had || prev != f) {
 				next[p] = f
 				changed = true
+				pathsChanged = pathsChanged || !had
 			} else if !ok && had {
 				delete(next, p)
-				changed = true
+				changed, pathsChanged = true, true
 			}
 		}
 	}
@@ -378,7 +379,7 @@ func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[strin
 			for _, g := range gone {
 				if strings.HasPrefix(p, g) {
 					delete(next, p)
-					changed = true
+					changed, pathsChanged = true, true
 					break
 				}
 			}
@@ -387,7 +388,7 @@ func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[strin
 	if !changed {
 		return cur
 	}
-	x.setListing(next)
+	x.setListing(next, pathsChanged)
 	return next
 }
 

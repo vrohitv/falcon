@@ -197,16 +197,21 @@ func (x *Index) setListingLocked(files []repository.File) {
 	x.files, x.entries, x.listed, x.set = files, ide.Entries(paths), time.Now(), set
 }
 
-// setListing replaces the listing with one kept by path (the watcher's changes).
-func (x *Index) setListing(set map[string]repository.File) {
+// setListing replaces the listing with one kept by path (the watcher's changes). When only sizes
+// changed (files saved, none added or removed), the paths' match entries are kept.
+func (x *Index) setListing(set map[string]repository.File, pathsChanged bool) {
 	files := make([]repository.File, 0, len(set))
 	for _, f := range set {
 		files = append(files, f)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	x.mu.Lock()
-	x.setListingLocked(files)
-	x.mu.Unlock()
+	defer x.mu.Unlock()
+	if pathsChanged || x.entries == nil {
+		x.setListingLocked(files)
+		return
+	}
+	x.files, x.listed, x.set = files, time.Now(), set
 }
 
 // Fuzzy matches a query against every file path.
