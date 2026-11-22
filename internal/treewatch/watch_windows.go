@@ -91,9 +91,11 @@ func (w *Watcher) parse(b []byte) {
 		rel := filepath.ToSlash(name)
 		switch info.Action {
 		case windows.FILE_ACTION_MODIFIED:
-			w.note(rel, false)
-		default: // added, removed, renamed
-			w.note(rel, true)
+			w.note(rel, false, false)
+		case windows.FILE_ACTION_ADDED, windows.FILE_ACTION_RENAMED_NEW_NAME:
+			w.note(rel, true, true)
+		default: // removed, renamed away
+			w.note(rel, true, false)
 		}
 		if info.NextEntryOffset == 0 {
 			break

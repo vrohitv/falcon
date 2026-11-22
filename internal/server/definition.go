@@ -3,16 +3,16 @@ package server
 import (
 	"context"
 	"errors"
-	"github.com/vrohitv/falcon/internal/sysenv"
-	"github.com/vrohitv/falcon/internal/workspace"
 	"net/http"
-	"os/exec"
 	"path"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vrohitv/falcon/internal/textsearch"
+	"github.com/vrohitv/falcon/internal/workspace"
 
 	"github.com/vrohitv/falcon/internal/outline"
 )
@@ -53,7 +53,7 @@ func (s *Server) definitions(w http.ResponseWriter, r *http.Request, rp *workspa
 		return 2
 	}
 	// The symbol index answers from memory. Until it has been built, files that mention the name are read
-	// (git grep finds them across any size of repository in a fraction of a second).
+	// (the text index narrows them down).
 	indexed := x.Ready()
 	x.Warm(3 * time.Second)
 	if indexed {
@@ -63,7 +63,7 @@ func (s *Server) definitions(w http.ResponseWriter, r *http.Request, rp *workspa
 	}
 	var mentions map[string]bool
 	if !indexed {
-		mentions = mentioning(r.Context(), rp, name)
+		mentions = s.mentioning(r.Context(), rp, name)
 	}
 	for _, f := range files {
 		rank := 2
@@ -186,27 +186,34 @@ func signature(rp *workspace.Repo, p string, line int) string {
 	return sig
 }
 
-// mentioning is the set of files containing name as a whole word (nil if git grep could not run, and
-// then every file is read).
-func mentioning(ctx context.Context, rp *workspace.Repo, name string) map[string]bool {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotePath=false", "grep", "-l", "-z", "-I", "-F", "-w", "--untracked", "-e", name)
-	cmd.Dir = rp.Repo.Path
-	cmd.Env = sysenv.Git()
-	out, err := cmd.Output()
-	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			return map[string]bool{}
+// mentioning is the set of files containing name as a whole word, read in-process (the text index
+// proposes the files that can contain it).
+func (s *Server) mentioning(ctx context.Context, rp *workspace.Repo, name string) map[string]bool {
+	x := s.index(rp)
+	files, ok := x.Candidates(ctx, name)
+	if !ok {
+		all, err := x.Files(ctx)
+		if err != nil {
+			return nil
 		}
+		files = make([]string, len(all))
+		for i, f := range all {
+			files[i] = f.Path
+		}
+	}
+	m, err := textsearch.Compile(textsearch.Options{Query: name, Case: true, Word: true, PerFile: 1})
+	if err != nil {
 		return nil
 	}
-	set := map[string]bool{}
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" {
-			set[p] = true
-		}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, matched, err := textsearch.Search(ctx, rp.Repo.Path, files, m)
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(matched))
+	for _, p := range matched {
+		set[p] = true
 	}
 	return set
 }

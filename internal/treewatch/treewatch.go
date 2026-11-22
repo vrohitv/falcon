@@ -21,6 +21,9 @@ type Change struct {
 	Paths []string
 	// Structure: something was created, removed or renamed, so the list of files may differ.
 	Structure bool
+	// Made: the paths among Paths that were created or renamed into place (a new directory's contents
+	// are read whole; a directory merely written to is not).
+	Made []string
 	// All: notifications were lost (the system's queue overflowed); anything may have changed.
 	All bool
 }
@@ -41,6 +44,7 @@ type Watcher struct {
 
 	mu        sync.Mutex
 	paths     map[string]struct{}
+	made      map[string]struct{}
 	structure bool
 	all       bool
 	kick      chan struct{}
@@ -62,7 +66,7 @@ func Start(root string, ignore Ignore) (*Watcher, error) {
 		ignore = func(string) bool { return false }
 	}
 	out := make(chan Change)
-	w := &Watcher{C: out, root: abs, ignore: ignore, stop: make(chan struct{}), paths: map[string]struct{}{}, kick: make(chan struct{}, 1)}
+	w := &Watcher{C: out, root: abs, ignore: ignore, stop: make(chan struct{}), paths: map[string]struct{}{}, made: map[string]struct{}{}, kick: make(chan struct{}, 1)}
 	stopBackend, err := w.start()
 	if err != nil {
 		return nil, err
@@ -109,13 +113,16 @@ func (w *Watcher) rel(abs string) string {
 	return filepath.ToSlash(r)
 }
 
-// note records a change from a backend.
-func (w *Watcher) note(rel string, structure bool) {
+// note records a change from a backend (made: created or renamed into place).
+func (w *Watcher) note(rel string, structure, made bool) {
 	if rel == "" || w.skipped(rel) {
 		return
 	}
 	w.mu.Lock()
 	w.paths[rel] = struct{}{}
+	if made {
+		w.made[rel] = struct{}{}
+	}
 	w.structure = w.structure || structure
 	w.mu.Unlock()
 	select {
@@ -158,7 +165,10 @@ func (w *Watcher) batch(out chan<- Change) {
 		for p := range w.paths {
 			c.Paths = append(c.Paths, p)
 		}
-		w.paths, w.structure, w.all = map[string]struct{}{}, false, false
+		for p := range w.made {
+			c.Made = append(c.Made, p)
+		}
+		w.paths, w.made, w.structure, w.all = map[string]struct{}{}, map[string]struct{}{}, false, false
 		w.mu.Unlock()
 		first = time.Time{}
 		if len(c.Paths) == 0 && !c.All {

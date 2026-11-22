@@ -73,7 +73,6 @@ func TestGoplsServesTheWholeMonorepo(t *testing.T) {
 		t.Fatalf("Later does not exist yet: %v", got)
 	}
 	os.WriteFile(filepath.Join(dir, "svc/api/later.go"), []byte("package api\n\nfunc Later() string { return \"later\" }\n"), 0o644)
-	s.reportChanges(rp)
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		if got := ask("svc/api/api.go", "definition", 6, 28); strings.Join(got, ",") == "svc/api/later.go:3" {

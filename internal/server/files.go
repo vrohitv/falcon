@@ -1,14 +1,10 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
-	"github.com/vrohitv/falcon/internal/sysenv"
 	"net/http"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +12,7 @@ import (
 
 	"github.com/vrohitv/falcon/internal/ide"
 	"github.com/vrohitv/falcon/internal/outline"
+	"github.com/vrohitv/falcon/internal/textsearch"
 	"github.com/vrohitv/falcon/internal/workspace"
 )
 
@@ -169,160 +166,113 @@ func (s *Server) saveFile(w http.ResponseWriter, r *http.Request, rp *workspace.
 	respond(w, f)
 }
 
-type hit struct {
-	Path    string `json:"path"`
-	Line    int    `json:"line"`
-	Column  int    `json:"column"`
-	Content string `json:"content"`
-}
-
-// search is git grep over tracked and untracked (not ignored) files: fast, literal by default, case-
-// insensitive unless Match case is on (as in VS Code: no guessing from capitals), or a regular
-// expression when asked.
+// search finds text in tracked and untracked (not ignored) files, in-process: literal by default,
+// case-insensitive unless Match case is on (as in VS Code: no guessing from capitals), or a regular
+// expression when asked. The folder's text index proposes the only files a literal can be in.
 func (s *Server) search(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
-	q := r.URL.Query().Get("q")
+	qs := r.URL.Query()
+	q := qs.Get("q")
 	if strings.TrimSpace(q) == "" || len(q) > 500 {
-		respond(w, []hit{})
+		respond(w, []textsearch.Hit{})
 		return
 	}
-	limit := 500
-	args := []string{"-c", "core.quotePath=false", "grep", "-n", "--column", "-I", "--untracked", "--no-color", "--full-name", "-z", "--max-count=50"}
-	if r.URL.Query().Get("regex") == "true" {
-		args = append(args, "-E")
-	} else {
-		args = append(args, "-F")
-	}
-	if r.URL.Query().Get("case") != "true" {
-		args = append(args, "-i")
-	}
-	if r.URL.Query().Get("word") == "true" {
-		args = append(args, "-w")
-	}
-	args = append(args, "-e", q, "--")
-	if glob := strings.TrimSpace(r.URL.Query().Get("glob")); glob != "" {
-		for _, g := range strings.Split(glob, ",") {
-			g = strings.TrimSpace(g)
-			if g == "" || strings.HasPrefix(g, "-") {
-				continue
-			}
-			// As in VS Code: a pattern without a slash matches at any depth; a folder means everything in it.
-			if !strings.Contains(g, "/") {
-				g = "**/" + g
-			} else if strings.HasSuffix(g, "/") {
-				g += "**"
-			}
-			args = append(args, ":(glob)"+g)
-		}
-	}
-	// The folder's text index proposes the only files that can match a literal search; git grep then
-	// reads just those. (Regular expressions search everything.)
-	x := s.index(rp)
-	indexed := false
-	if r.URL.Query().Get("regex") != "true" {
-		if cands, ok := x.Candidates(r.Context(), q); ok {
-			if globs := globPatterns(r.URL.Query().Get("glob")); len(globs) > 0 {
-				kept := cands[:0]
-				for _, c := range cands {
-					for _, g := range globs {
-						if g.MatchString(c) {
-							kept = append(kept, c)
-							break
-						}
-					}
-				}
-				cands = kept
-			}
-			if len(cands) == 0 {
-				respond(w, []hit{})
-				return
-			}
-			if len(cands) <= 5000 {
-				for i, a := range args {
-					if a == "--" {
-						args = args[:i+1]
-						for _, f := range cands {
-							args = append(args, ":(literal)"+f)
-						}
-						break
-					}
-				}
-				indexed = true
-			}
-		}
-	}
-	// Typing narrows a search: when the new text contains the previous one (same options, nothing changed
-	// since), only the files that matched before can match now, and git grep reads just those. Never for
-	// regular expressions or whole words, where containing the old text does not mean matching it.
-	insensitive := r.URL.Query().Get("case") != "true"
-	opts := r.URL.Query().Get("case") + "|" + r.URL.Query().Get("word") + "|" + r.URL.Query().Get("regex") + "|" + r.URL.Query().Get("glob")
-	literal := r.URL.Query().Get("regex") != "true" && r.URL.Query().Get("word") != "true"
-	if prev, ok := s.lastSearch(rp.ID); ok && literal && !indexed && prev.opts == opts && prev.gen == x.Gen() && time.Since(prev.at) < 10*time.Second &&
-		len(q) > len(prev.q) && len(prev.files) <= 5000 &&
-		(strings.Contains(q, prev.q) || (prev.insensitive && strings.Contains(strings.ToLower(q), strings.ToLower(prev.q)))) {
-		if len(prev.files) == 0 {
-			s.rememberSearch(rp.ID, search{q: q, opts: opts, insensitive: insensitive, gen: x.Gen(), at: time.Now(), files: []string{}})
-			respond(w, []hit{})
-			return
-		}
-		for i, a := range args {
-			if a == "--" {
-				args = args[:i+1]
-				for _, f := range prev.files {
-					args = append(args, ":(literal)"+f)
-				}
-				break
-			}
-		}
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = rp.Repo.Path
-	cmd.Env = sysenv.Git()
-	out, err := cmd.Output()
+	const limit = 500
+	o := textsearch.Options{Query: q, Regex: qs.Get("regex") == "true", Case: qs.Get("case") == "true", Word: qs.Get("word") == "true"}
+	m, err := textsearch.Compile(o)
 	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			s.rememberSearch(rp.ID, search{q: q, opts: opts, insensitive: insensitive, gen: x.Gen(), at: time.Now(), files: []string{}})
-			respond(w, []hit{})
-			return
-		}
-		if errors.As(err, &exit) && len(exit.Stderr) > 0 {
-			fail(w, errors.New(strings.TrimSpace(string(exit.Stderr))))
-			return
-		}
 		fail(w, err)
 		return
 	}
-	hits := []hit{}
-	// Every matching file is noted (not just those in the first 500 hits), for narrowing the next search.
-	seen := map[string]bool{}
-	files := []string{}
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		// path NUL line NUL column NUL text
-		p := bytes.SplitN(sc.Bytes(), []byte{0}, 4)
-		if len(p) != 4 {
-			continue
+	x := s.index(rp)
+	var files []string
+	indexed := false
+	if !o.Regex {
+		if cands, ok := x.Candidates(r.Context(), q); ok {
+			files, indexed = cands, true
 		}
-		if name := string(p[0]); !seen[name] {
-			seen[name] = true
-			files = append(files, name)
+	} else {
+		// A regular expression's literal pieces must all be in a matching file.
+		for _, lit := range textsearch.RequiredLiterals(q, o.Case) {
+			cands, ok := x.Candidates(r.Context(), lit)
+			if !ok {
+				continue
+			}
+			if !indexed {
+				files, indexed = cands, true
+				continue
+			}
+			files = intersectSorted(files, cands)
 		}
-		if len(hits) >= limit {
-			continue
-		}
-		line, _ := strconv.Atoi(string(p[1]))
-		col, _ := strconv.Atoi(string(p[2]))
-		text := string(p[3])
-		if len(text) > 400 {
-			text = text[:400]
-		}
-		hits = append(hits, hit{Path: string(p[0]), Line: line, Column: col, Content: text})
 	}
-	s.rememberSearch(rp.ID, search{q: q, opts: opts, insensitive: insensitive, gen: x.Gen(), at: time.Now(), files: files})
+	// Typing narrows a search: when the new text contains the previous one (same options, nothing changed
+	// since), only the files that matched before can match now. Never for regular expressions or whole
+	// words, where containing the old text does not mean matching it.
+	opts := qs.Get("case") + "|" + qs.Get("word") + "|" + qs.Get("regex") + "|" + qs.Get("glob")
+	literal := !o.Regex && !o.Word
+	if prev, ok := s.lastSearch(rp.ID); !indexed && ok && literal && prev.opts == opts && prev.gen == x.Gen() && time.Since(prev.at) < 10*time.Second &&
+		len(q) > len(prev.q) && (strings.Contains(q, prev.q) || (prev.insensitive && strings.Contains(strings.ToLower(q), strings.ToLower(prev.q)))) {
+		files = prev.files
+	}
+	if files == nil {
+		all, err := x.Files(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		files = make([]string, len(all))
+		for i, f := range all {
+			files[i] = f.Path
+		}
+	}
+	if globs := globPatterns(qs.Get("glob")); len(globs) > 0 {
+		kept := make([]string, 0, len(files))
+		for _, f := range files {
+			for _, g := range globs {
+				if g.MatchString(f) {
+					kept = append(kept, f)
+					break
+				}
+			}
+		}
+		files = kept
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	hits, matched, err := textsearch.Search(ctx, rp.Repo.Path, files, m)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if matched == nil {
+		matched = []string{}
+	}
+	// Every matching file is noted (not just those in the first 500 hits), for narrowing the next search.
+	s.rememberSearch(rp.ID, search{q: q, opts: opts, insensitive: !o.Case, gen: x.Gen(), at: time.Now(), files: matched})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	if hits == nil {
+		hits = []textsearch.Hit{}
+	}
 	respond(w, hits)
+}
+
+// intersectSorted keeps the strings in both sorted lists.
+func intersectSorted(a, b []string) []string {
+	out := make([]string, 0, min(len(a), len(b)))
+	for i, j := 0, 0; i < len(a) && j < len(b); {
+		switch {
+		case a[i] == b[j]:
+			out = append(out, a[i])
+			i++
+			j++
+		case a[i] < b[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return out
 }
 
 // summary is the folder at a glance: branch, head, how many changes.

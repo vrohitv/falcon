@@ -99,8 +99,8 @@ type Index struct {
 	text textIndex
 
 	lv  live
-	wmu sync.Mutex          // held by whatever changes the index (see live.go)
-	set map[string]struct{} // the listing, as a set (under mu)
+	wmu sync.Mutex                 // held by whatever changes the index (see live.go)
+	set map[string]repository.File // the listing, by path (under mu)
 
 	// closed: the folder was removed; nothing more is saved.
 	closed atomic.Bool
@@ -183,16 +183,30 @@ func (x *Index) list(ctx context.Context) ([]repository.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	x.setListingLocked(files)
+	return files, nil
+}
+
+func (x *Index) setListingLocked(files []repository.File) {
 	paths := make([]string, len(files))
+	set := make(map[string]repository.File, len(files))
 	for i, f := range files {
 		paths[i] = f.Path
-	}
-	set := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		set[p] = struct{}{}
+		set[f.Path] = f
 	}
 	x.files, x.entries, x.listed, x.set = files, ide.Entries(paths), time.Now(), set
-	return files, nil
+}
+
+// setListing replaces the listing with one kept by path (the watcher's changes).
+func (x *Index) setListing(set map[string]repository.File) {
+	files := make([]repository.File, 0, len(set))
+	for _, f := range set {
+		files = append(files, f)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	x.mu.Lock()
+	x.setListingLocked(files)
+	x.mu.Unlock()
 }
 
 // Fuzzy matches a query against every file path.

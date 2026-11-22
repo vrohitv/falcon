@@ -1,12 +1,8 @@
 package repository
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -73,28 +69,11 @@ func (r *Repository) Directory(ctx context.Context, path string) ([]DirectoryEnt
 	if len(result) == 0 {
 		return result, nil
 	}
-	// Git handles nested .gitignore files, negation, tracked exceptions and
-	// .git/info/exclude. Passing only direct children avoids recursive scanning.
-	cmd, err := r.gitCommand(ctx, "check-ignore", "-z", "--stdin")
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stdin = strings.NewReader(input.String())
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-	if err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return nil, fmt.Errorf("read Git ignore rules: %s: %w", stderr.String(), err)
-		}
-	}
-	ignored := map[string]bool{}
-	for _, p := range strings.Split(string(output), "\x00") {
-		ignored[strings.TrimSuffix(p, "/")] = true
-	}
+	// The ignore rules are held in memory (see Ignorer): no git process per folder opened.
+	ig := r.Ignorer()
+	ig.Sync()
 	for i := range result {
-		result[i].Ignored = ignored[result[i].Path]
+		result[i].Ignored = ig.Ignored(result[i].Path, result[i].Directory)
 	}
 	return result, nil
 }

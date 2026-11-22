@@ -5,16 +5,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	git "github.com/go-git/go-git/v5"
-	"github.com/vrohitv/falcon/internal/sysenv"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/vrohitv/falcon/internal/sysenv"
 
 	"github.com/vrohitv/falcon/internal/domain"
 )
@@ -22,8 +25,9 @@ import (
 const MaxFileSize = 2 << 20
 
 type Repository struct {
-	Path string
-	mu   sync.Mutex
+	Path    string
+	mu      sync.Mutex
+	ignorer *Ignorer
 	// gogit is the kept-open go-git handle (see native).
 	gogit struct {
 		sync.Mutex
@@ -72,17 +76,8 @@ func Open(path string) (*Repository, error) {
 		return nil, err
 	}
 	r := &Repository{Path: p}
-	ctx, c := context.WithTimeout(context.Background(), 10*time.Second)
-	defer c()
-	top, err := r.Git(ctx, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return nil, fmt.Errorf("repository must be initialized with git: %w", err)
-	}
-	canonical, err := filepath.EvalSymlinks(strings.TrimSpace(top))
-	if err != nil {
-		return nil, err
-	}
-	if canonical != p {
+	// The root of a git worktree has .git: the repository's folder, or a file naming it.
+	if _, own := r.GitDirs(); !isDir(own) {
 		return nil, errors.New("repository path must identify the Git worktree root")
 	}
 	return r, nil
@@ -112,11 +107,8 @@ func (r *Repository) filterKeys(ctx context.Context, owner bool, env []string) (
 	f.Lock()
 	defer f.Unlock()
 	if f.gitDir == "" {
-		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir")
-		cmd.Dir, cmd.Env = r.Path, env
-		if out, err := cmd.Output(); err == nil {
-			f.gitDir = strings.TrimSpace(string(out))
-		}
+		common, own := r.GitDirs()
+		f.gitDir = common + "\n" + own
 	}
 	files := []string{}
 	for _, d := range strings.Split(f.gitDir, "\n") {
@@ -385,50 +377,73 @@ func Language(path string) string {
 		return "text"
 	}
 }
-func (r *Repository) Files(ctx context.Context) ([]File, error) {
-	out, err := r.Git(ctx, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	if err != nil {
-		return nil, err
-	}
-	// Each directory is checked for symlinks once, not once per file below
-	// it; a listing costs about one syscall per file.
-	dirs := map[string]bool{".": true}
-	var safeDir func(string) bool
-	safeDir = func(dir string) bool {
-		if ok, known := dirs[dir]; known {
-			return ok
+
+// Files is every file of the folder git would show: tracked ones, and untracked ones no ignore rule
+// leaves out. It is a walk of the folder with the rules held in memory (see Ignorer); no git process.
+func (r *Repository) Files(ctx context.Context) ([]File, error) { return r.FilesUnder(ctx, "") }
+
+// FilesUnder is Files for one folder-relative directory ("" for all), sorted by path.
+func (r *Repository) FilesUnder(ctx context.Context, dir string) ([]File, error) {
+	ig := r.Ignorer()
+	ig.Sync()
+	start := r.Path
+	if dir != "" {
+		if ig.SkipDir(dir) {
+			return []File{}, nil
 		}
-		ok := safeDir(filepath.Dir(dir))
-		if ok {
-			info, err := os.Lstat(filepath.Join(r.Path, dir))
-			ok = err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
-		}
-		dirs[dir] = ok
-		return ok
+		start = filepath.Join(r.Path, filepath.FromSlash(dir))
 	}
-	seen := map[string]bool{}
 	files := []File{}
-	for _, p := range strings.Split(out, "\x00") {
-		if p == "" || seen[p] || ValidPath(p) != nil {
-			continue
+	err := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == start {
+				return err
+			}
+			return nil // gone meanwhile, or unreadable
 		}
-		seen[p] = true
-		if !safeDir(filepath.Dir(p)) {
-			continue
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		info, e := os.Lstat(filepath.Join(r.Path, p))
-		if e == nil && info.Mode()&os.ModeSymlink != 0 {
+		rel, _ := filepath.Rel(r.Path, p)
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || ig.SkipDir(rel) {
+				return filepath.SkipDir
+			}
+			// Another repository inside (a submodule, a nested clone) is its own folder, as for git.
+			if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if ValidPath(rel) != nil || ig.Ignored(rel, false) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
 			// A link to a file inside the folder is listed (under its own name).
-			if target, ok := r.inside(filepath.Join(r.Path, p)); ok {
-				info, e = os.Stat(target)
-			} else {
-				continue
+			target, ok := r.inside(p)
+			if !ok {
+				return nil
+			}
+			if info, err = os.Stat(target); err != nil {
+				return nil
 			}
 		}
-		if e != nil || !info.Mode().IsRegular() {
-			continue
+		if !info.Mode().IsRegular() {
+			return nil
 		}
-		files = append(files, File{Path: p, Size: info.Size(), Language: Language(p)})
+		files = append(files, File{Path: rel, Size: info.Size(), Language: Language(rel)})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
@@ -508,3 +523,43 @@ func ValidCommit(s string) bool {
 
 // Snapshot materializes the exact Git tree through a temporary index. The user's
 // index is never touched. Git records mode bits, symlinks and untracked files.
+
+// FileAt is one folder-relative path as the listing would have it: ok when it is a file git would show
+// (tracked, or untracked and not ignored, not inside another repository), by the same rules as Files.
+func (r *Repository) FileAt(rel string) (File, bool) {
+	if ValidPath(rel) != nil {
+		return File{}, false
+	}
+	ig := r.Ignorer()
+	if ig.Ignored(rel, false) {
+		return File{}, false
+	}
+	for d := path.Dir(rel); d != "." && d != "/"; d = path.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(r.Path, filepath.FromSlash(d), ".git")); err == nil {
+			return File{}, false // inside another repository
+		}
+	}
+	abs := filepath.Join(r.Path, filepath.FromSlash(rel))
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return File{}, false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, ok := r.inside(abs)
+		if !ok {
+			return File{}, false
+		}
+		if info, err = os.Stat(target); err != nil {
+			return File{}, false
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return File{}, false
+	}
+	return File{Path: rel, Size: info.Size(), Language: Language(rel)}, true
+}
+
+func isDir(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
+}

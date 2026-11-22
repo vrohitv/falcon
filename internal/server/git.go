@@ -294,11 +294,7 @@ func (s *Server) watchGit(rp *workspace.Repo) (*gitWatch, chan int, error) {
 	}
 	gw := s.git.watch[rp.ID]
 	if gw == nil {
-		dir, err := rp.Repo.Git(context.Background(), "rev-parse", "--absolute-git-dir")
-		if err != nil {
-			return nil, nil, err
-		}
-		dir = strings.TrimSpace(dir)
+		_, dir := rp.Repo.GitDirs()
 		fw, err := fsnotify.NewWatcher()
 		if err != nil {
 			return nil, nil, err
@@ -343,11 +339,7 @@ func (s *Server) watchGit(rp *workspace.Repo) (*gitWatch, chan int, error) {
 					if gw.t != nil {
 						gw.t.Stop()
 					}
-					gw.t = time.AfterFunc(120*time.Millisecond, func() {
-						gw.fire()
-						// A commit, a checkout, a pull: what changed is reported to the language servers.
-						go s.reportChanges(rp)
-					})
+					gw.t = time.AfterFunc(120*time.Millisecond, func() { gw.fire() })
 					gw.mu.Unlock()
 				case _, ok := <-fw.Errors:
 					if !ok {
@@ -467,7 +459,6 @@ func (s *Server) watchTree(rp *workspace.Repo, gw *gitWatch) {
 		if changed {
 			s.index(rp).Invalidate()
 			gw.fire()
-			go s.reportChanges(rp)
 		}
 	}
 }

@@ -3,13 +3,60 @@ package index
 import (
 	"context"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vrohitv/falcon/internal/repository"
 	"github.com/vrohitv/falcon/internal/treewatch"
 )
+
+// FileEvent is one file that came, changed or went (for the language servers).
+type FileEvent struct {
+	Path string
+	Kind int // Created, Changed, Deleted (the numbers LSP uses)
+}
+
+const (
+	Created = 1
+	Changed = 2
+	Deleted = 3
+)
+
+// OnFiles calls f with the files each batch created, changed or deleted; the returned function stops it.
+func (x *Index) OnFiles(f func([]FileEvent)) func() {
+	l := &x.lv
+	l.mu.Lock()
+	if l.files == nil {
+		l.files = map[int]func([]FileEvent){}
+	}
+	l.nextSub++
+	id := l.nextSub
+	l.files[id] = f
+	l.mu.Unlock()
+	return func() {
+		l.mu.Lock()
+		delete(l.files, id)
+		l.mu.Unlock()
+	}
+}
+
+func (x *Index) tellFiles(events []FileEvent) {
+	if len(events) == 0 {
+		return
+	}
+	x.lv.mu.Lock()
+	fs := make([]func([]FileEvent), 0, len(x.lv.files))
+	for _, f := range x.lv.files {
+		fs = append(fs, f)
+	}
+	x.lv.mu.Unlock()
+	for _, f := range fs {
+		f(events)
+	}
+}
 
 // The folder's watcher is the source of truth. Once it runs, the listing, the text index and the symbols
 // change when the operating system says a file changed, and only for what changed; a search or a
@@ -26,8 +73,8 @@ type live struct {
 	ready   bool  // watching, and everything before the watch began has been taken in
 	err     error // why the folder cannot be watched
 	subs    map[chan struct{}]struct{}
-	ignored map[string]bool // directories git ignores (known from the start, or asked as they appear)
-	asking  bool            // the start is over: an unknown directory is asked about
+	files   map[int]func([]FileEvent)
+	nextSub int
 	rebuild *time.Timer
 }
 
@@ -118,45 +165,21 @@ func (x *Index) stopWatcher() {
 	}
 }
 
-// isIgnored tells the watcher which directories to leave out: those git ignores. The ones present at the
-// start come from one git call; a directory made later is asked about once.
-func (x *Index) isIgnored(dir string) bool {
-	l := &x.lv
-	l.mu.Lock()
-	v, known := l.ignored[dir]
-	asking := l.asking
-	l.mu.Unlock()
-	if known || !asking {
-		return v
+// skipDir tells the watcher which directories to leave out: those git ignores (answered in memory, see
+// repository.Ignorer) and repositories inside the folder.
+func (x *Index) skipDir(dir string) bool {
+	if x.repo.Ignorer().SkipDir(dir) {
+		return true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err := x.repo.Git(ctx, "check-ignore", "-q", "--", dir+"/")
-	l.mu.Lock()
-	l.ignored[dir] = err == nil
-	l.mu.Unlock()
+	_, err := os.Lstat(filepath.Join(x.repo.Path, filepath.FromSlash(dir), ".git"))
 	return err == nil
 }
 
 func (x *Index) runLive() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	out, err := x.repo.Git(ctx, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
-	cancel()
-	ignored := map[string]bool{}
-	if err == nil {
-		for _, p := range strings.Split(out, "\x00") {
-			if strings.HasSuffix(p, "/") {
-				ignored[strings.TrimSuffix(p, "/")] = true
-			}
-		}
-	}
 	l := &x.lv
+	x.repo.Ignorer().Sync()
+	w, err := treewatch.Start(x.repo.Path, x.skipDir)
 	l.mu.Lock()
-	l.ignored, l.asking = ignored, false
-	l.mu.Unlock()
-	w, err := treewatch.Start(x.repo.Path, x.isIgnored)
-	l.mu.Lock()
-	l.asking = true
 	if err != nil {
 		l.err = err
 		l.started = false // tried again on a later use
@@ -210,21 +233,13 @@ func (x *Index) Changed(paths ...string) {
 		x.Invalidate()
 		return
 	}
-	x.mu.Lock()
-	structure := false
-	for _, p := range paths {
-		if _, ok := x.set[p]; !ok {
-			structure = true
-		}
-	}
-	x.mu.Unlock()
 	// A save does not wait behind a long build: the watcher reports the same change a moment later.
 	if !x.wmu.TryLock() {
 		x.Invalidate()
 		return
 	}
 	defer x.wmu.Unlock()
-	x.applyLocked(treewatch.Change{Paths: paths, Structure: structure})
+	x.applyLocked(treewatch.Change{Paths: paths, Structure: true})
 }
 
 // apply takes in one batch of changes: the listing again only when files may have appeared or gone, and
@@ -238,90 +253,70 @@ func (x *Index) apply(c treewatch.Change) {
 func (x *Index) applyLocked(c treewatch.Change) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	ig := x.repo.Ignorer()
+	ig.Sync() // git's index may have changed (a file tracked or untracked)
+	gitignore := false
+	for _, p := range c.Paths {
+		if path.Base(p) == ".gitignore" {
+			gitignore = true
+		}
+	}
+	if gitignore {
+		ig.Reload()
+	}
 	x.mu.Lock()
 	x.gen++
 	before := x.set
 	x.mu.Unlock()
-	if c.All {
-		x.mu.Lock()
-		x.dirty = true
-		x.mu.Unlock()
-		if files, err := x.Fresh(ctx); err == nil {
-			paths := make([]string, len(files))
-			for i, f := range files {
-				paths[i] = f.Path
-			}
-			x.text.mu.Lock()
-			built := x.text.files != nil
-			x.text.mu.Unlock()
-			if built {
-				x.syncText(ctx, paths, true)
-				x.saveText()
-			}
-			if x.Ready() {
-				x.refreshLocked(ctx, nil)
-			}
-		}
-		x.notify()
-		return
-	}
-	changed := map[string]bool{}
-	dirs := []string{}
-	gitignore := false
-	for _, p := range c.Paths {
-		changed[p] = true
-		if filepath.Base(p) == ".gitignore" {
-			gitignore = true
-		}
-	}
-	if c.Structure {
+	after := before
+	if c.All || gitignore || before == nil {
+		// Anything may have changed: the folder is walked again.
 		if _, err := x.list(ctx); err == nil {
 			x.mu.Lock()
-			after := x.set
+			after = x.set
 			x.mu.Unlock()
-			// Files that came or went (a directory renamed reports only the directory).
-			for p := range before {
-				if _, ok := after[p]; !ok {
-					changed[p] = true
-				}
+		}
+	} else {
+		after = x.updateListing(ctx, c)
+	}
+	// What came, went or was written, for the text, the symbols and the language servers.
+	events := []FileEvent{}
+	paths := []string{}
+	for p := range after {
+		if _, ok := before[p]; !ok {
+			events = append(events, FileEvent{Path: p, Kind: Created})
+			paths = append(paths, p)
+		}
+	}
+	for p := range before {
+		if _, ok := after[p]; !ok {
+			events = append(events, FileEvent{Path: p, Kind: Deleted})
+			paths = append(paths, p)
+		}
+	}
+	if c.All || gitignore {
+		// Every file's time is compared (only the changed ones are read).
+		for p := range after {
+			if _, ok := before[p]; ok {
+				paths = append(paths, p)
 			}
-			for p := range after {
-				if _, ok := before[p]; !ok {
-					changed[p] = true
-				}
+		}
+	} else {
+		for _, p := range c.Paths {
+			_, was := before[p]
+			_, is := after[p]
+			if was && is {
+				events = append(events, FileEvent{Path: p, Kind: Changed})
+				paths = append(paths, p)
 			}
 		}
 	}
-	// A directory reported (made, or written to) stands for the listed files in it.
-	x.mu.Lock()
-	set := x.set
-	for p := range changed {
-		if _, ok := set[p]; !ok {
-			if _, was := before[p]; !was {
-				dirs = append(dirs, p+"/")
-			}
-		}
-	}
-	if len(dirs) > 0 {
-		for p := range set {
-			for _, d := range dirs {
-				if strings.HasPrefix(p, d) {
-					changed[p] = true
-					break
-				}
-			}
-		}
-	}
-	x.mu.Unlock()
-	paths := make([]string, 0, len(changed))
-	for p := range changed {
-		paths = append(paths, p)
-	}
-	x.syncTextPaths(paths, set)
+	x.syncTextPaths(paths, after)
 	x.refreshLocked(ctx, paths)
 	x.notify()
+	x.tellFiles(events)
 	if gitignore {
-		// What is ignored changed: watch again with the new answer (and take everything in once).
+		// What is ignored changed: directories may need watching (or no longer): watch again.
 		go func() {
 			x.stopWatcher()
 			x.lv.mu.Lock()
@@ -332,10 +327,74 @@ func (x *Index) applyLocked(c treewatch.Change) {
 	}
 }
 
+// updateListing applies a batch to the listing without walking the folder: each path reported is looked
+// at (a file is listed or not by the same rules as a walk), a directory that went takes its files with
+// it, and only a directory made just now is walked. It returns the new listing.
+func (x *Index) updateListing(ctx context.Context, c treewatch.Change) map[string]repository.File {
+	x.mu.Lock()
+	cur := x.set
+	x.mu.Unlock()
+	made := map[string]bool{}
+	for _, p := range c.Made {
+		made[p] = true
+	}
+	next := make(map[string]repository.File, len(cur))
+	for p, f := range cur {
+		next[p] = f
+	}
+	gone := []string{}
+	changed := false
+	for _, p := range c.Paths {
+		info, err := os.Lstat(filepath.Join(x.repo.Path, filepath.FromSlash(p)))
+		switch {
+		case err != nil:
+			if _, ok := next[p]; ok {
+				delete(next, p)
+				changed = true
+			}
+			gone = append(gone, p+"/")
+		case info.IsDir():
+			if made[p] && !x.skipDir(p) {
+				if fs, err := x.repo.FilesUnder(ctx, p); err == nil {
+					for _, f := range fs {
+						next[f.Path] = f
+					}
+					changed = true
+				}
+			}
+		default:
+			f, ok := x.repo.FileAt(p)
+			if prev, had := next[p]; ok && (!had || prev != f) {
+				next[p] = f
+				changed = true
+			} else if !ok && had {
+				delete(next, p)
+				changed = true
+			}
+		}
+	}
+	if len(gone) > 0 {
+		for p := range next {
+			for _, g := range gone {
+				if strings.HasPrefix(p, g) {
+					delete(next, p)
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	if !changed {
+		return cur
+	}
+	x.setListing(next)
+	return next
+}
+
 // syncTextPaths brings the text of just these files up to date. Many changes are folded into the
 // inverted index at once; a few are folded in after a quiet moment (until then each is decided by its
 // own trigrams).
-func (x *Index) syncTextPaths(paths []string, listed map[string]struct{}) {
+func (x *Index) syncTextPaths(paths []string, listed map[string]repository.File) {
 	t := &x.text
 	t.mu.Lock()
 	if t.files == nil {

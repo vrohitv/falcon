@@ -78,11 +78,11 @@ func (w *Watcher) start() (func(), error) {
 							w.lost()
 						}
 					}
-					w.note(rel, true)
+					w.note(rel, true, true)
 				case e.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-					w.note(rel, true)
+					w.note(rel, true, false)
 				case e.Op&fsnotify.Write != 0:
-					w.note(rel, false)
+					w.note(rel, false, false)
 				}
 			case err, ok := <-fw.Errors:
 				if !ok {

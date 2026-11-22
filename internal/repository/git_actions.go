@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/vrohitv/falcon/internal/sysenv"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -632,31 +630,8 @@ func (r *Repository) settings(ctx context.Context) gitSettings {
 	return cfg
 }
 
-// gitDirs are the repository's common Git folder and this worktree's own (the same outside linked
-// worktrees). Asked of git once and kept.
-func (r *Repository) gitDirs(ctx context.Context) (string, string) {
-	f := &r.filters
-	f.Lock()
-	dirs := f.gitDir
-	f.Unlock()
-	if dirs == "" {
-		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir")
-		cmd.Dir, cmd.Env = r.Path, sysenv.Git()
-		out, err := cmd.Output()
-		if err != nil {
-			return filepath.Join(r.Path, ".git"), filepath.Join(r.Path, ".git")
-		}
-		dirs = strings.TrimSpace(string(out))
-		f.Lock()
-		f.gitDir = dirs
-		f.Unlock()
-	}
-	common, dir, _ := strings.Cut(dirs, "\n")
-	if dir == "" {
-		dir = common
-	}
-	return filepath.Clean(strings.TrimSpace(common)), filepath.Clean(strings.TrimSpace(dir))
-}
+// gitDirs are the repository's common git folder and this worktree's own (see GitDirs).
+func (r *Repository) gitDirs(context.Context) (string, string) { return r.GitDirs() }
 
 // redactURL drops a password or token written into a remote's URL before it is shown.
 func redactURL(raw string) string {
