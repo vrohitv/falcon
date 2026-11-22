@@ -9,11 +9,20 @@ mk() {
   git -C "$1" init -q -b main
   git -C "$1" config user.name 'Falcon Test'
   git -C "$1" config user.email 'test@example.test'
+  # Exact bytes in, exact bytes out, whatever line-ending conversion this machine's Git does.
+  git -C "$1" config core.autocrlf false
+}
+# python3 where it runs; on Windows that name is often only the Microsoft Store's installer stub.
+python3() {
+  if command python3 -c '' 2>/dev/null; then command python3 "$@"; else command python "$@"; fi
 }
 mkdir "$dir/alpha" "$dir/beta" "$dir/gamma"
 mk "$dir/alpha"
 mk "$dir/beta"
 python3 - "$dir" <<'PY'
+import pathlib  # files are written with LF, as on Linux (Python on Windows would write CRLF)
+_write_text = pathlib.Path.write_text
+pathlib.Path.write_text = lambda self, data, *a, **k: _write_text(self, data, *a, **{"newline": chr(10), **k})
 import sys
 from pathlib import Path
 d = Path(sys.argv[1])
@@ -35,6 +44,9 @@ done
 mkdir -p "$dir/gamma"
 mk "$dir/gamma"
 python3 - "$dir/gamma" "$project/web/node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2" <<'PY'
+import pathlib  # files are written with LF, as on Linux (Python on Windows would write CRLF)
+_write_text = pathlib.Path.write_text
+pathlib.Path.write_text = lambda self, data, *a, **k: _write_text(self, data, *a, **{"newline": chr(10), **k})
 import sys, os, zlib, struct, math, wave, shutil
 from pathlib import Path
 g = Path(sys.argv[1])

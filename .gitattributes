@@ -1,3 +1,5 @@
+# LF everywhere, as gofmt and the embedded UI expect (Git for Windows would otherwise check out CRLF).
+* text=auto eol=lf
 *.ps1 text eol=crlf
 *.sh text eol=lf
 web/dist/** -diff linguist-generated

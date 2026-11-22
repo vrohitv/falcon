@@ -26,7 +26,8 @@ async function copied(page: Page) {
   await page.evaluate(() => navigator.clipboard.writeText(""));
   await page.keyboard.press(`${mod}+c`);
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).not.toBe("");
-  return page.evaluate(() => navigator.clipboard.readText());
+  // The system clipboard on Windows keeps line breaks as CRLF (Chromium converts both ways).
+  return (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n");
 }
 const row = (page: Page, n: number) => page.locator(`.code-row[data-line="${n}"] .code-text`);
 

@@ -47,7 +47,7 @@ test("a shell in the folder: run, open a path from the output, split, tabs, hide
   await expect.poll(() => screen(page)).toMatch(/\S/);
   await page.keyboard.type("echo sum-$((40+2)); pwd; echo internal/greet/greet.go:4\n");
   await expect.poll(() => screen(page)).toContain("sum-42");
-  expect(await screen(page)).toMatch(/alpha\s*$|\/alpha\n/m);
+  await expect.poll(() => screen(page)).toMatch(/alpha\s*$|\/alpha\n/m);
 
   // Ctrl+click a path:line in the output: it opens in the editor at that line.
   const at = (await cellOf(page, "internal/greet/greet.go:4"))!;
@@ -66,7 +66,13 @@ test("a shell in the folder: run, open a path from the output, split, tabs, hide
 
   // A lot of output at once arrives whole (it is acknowledged as it is drawn).
   await page.locator(".terminal-tab.shown .xterm").click();
-  await page.keyboard.type("seq 1 100000 | tail -n 3; seq 1 100000 > /dev/null; seq 1 50000; echo end-$((1+1))\n");
+  // (On Windows the shell is PowerShell.)
+  await page.keyboard.type(
+    process.platform === "win32"
+      ? // (one write: PowerShell prints each pipeline item as its own console write, far slower than seq)
+        'Write-Output (1..100000)[-3..-1]; 1..100000 | Out-Null; (1..50000) -join "`n"; echo "end-$(1+1)"\n'
+      : "seq 1 100000 | tail -n 3; seq 1 100000 > /dev/null; seq 1 50000; echo end-$((1+1))\n",
+  );
   await expect.poll(() => screen(page), { timeout: 30000 }).toContain("end-2");
   expect(await screen(page)).toContain("50000");
 

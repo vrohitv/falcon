@@ -25,7 +25,12 @@ import (
 const MaxFileSize = 2 << 20
 
 type Repository struct {
-	Path    string
+	Path string
+	// real is Path as the system resolves it (see realPath), what a followed link must lead into.
+	real struct {
+		sync.Once
+		path string
+	}
 	mu      sync.Mutex
 	ignorer *Ignorer
 	// gogit is the kept-open go-git handle (see native).
@@ -214,19 +219,21 @@ func (r *Repository) gitCommandAs(ctx context.Context, owner bool, args ...strin
 	return cmd, nil
 }
 
-// Only Git's own folder is off limits: Falcon is the owner's viewer, and what is in the folder is theirs.
-var protectedComponents = []string{".git"}
-
+// Protected reports a path into Git's own folder, the only place off limits: Falcon is the owner's viewer,
+// and what is in the folder is theirs. Every spelling the filesystem accepts for .git counts (see
+// protectedName).
 func Protected(path string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
-		for _, pattern := range protectedComponents {
-			if matched, _ := filepath.Match(pattern, part); matched {
-				return true
-			}
+		if protectedName(part) {
+			return true
 		}
 	}
 	return false
 }
+
+// isLink reports an entry that leads elsewhere: a symbolic link, or (on Windows) a junction, which Go
+// reports as irregular rather than as a link.
+func isLink(m fs.FileMode) bool { return m&(fs.ModeSymlink|fs.ModeIrregular) != 0 }
 func ValidPath(path string) error {
 	if path == "" || !filepath.IsLocal(path) || strings.Contains(path, "\\") || Protected(path) {
 		return errors.New("path must be a repository-relative, non-protected path")
@@ -248,7 +255,10 @@ func (r *Repository) securePath(path string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		if sameAsGitDir(cur, info) {
+			return "", errors.New("path must be a repository-relative, non-protected path")
+		}
+		if isLink(info.Mode()) {
 			// A link is followed only when where it leads is inside the folder (and not Git's own).
 			if target, ok := r.inside(full); ok {
 				return target, nil
@@ -261,11 +271,17 @@ func (r *Repository) securePath(path string) (string, error) {
 
 // inside resolves every link in abs and reports whether the result is in the folder, outside .git.
 func (r *Repository) inside(abs string) (string, bool) {
-	target, err := filepath.EvalSymlinks(abs)
+	target, err := realPath(abs)
 	if err != nil {
 		return "", false
 	}
-	rel, err := filepath.Rel(r.Path, target)
+	r.real.Do(func() {
+		r.real.path = r.Path
+		if p, err := realPath(r.Path); err == nil {
+			r.real.path = p
+		}
+	})
+	rel, err := filepath.Rel(r.real.path, target)
 	if err != nil || rel == "." || !filepath.IsLocal(rel) || Protected(filepath.ToSlash(rel)) {
 		return "", false
 	}
@@ -426,7 +442,7 @@ func (r *Repository) FilesUnder(ctx context.Context, dir string) ([]File, error)
 		if err != nil {
 			return nil
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		if isLink(info.Mode()) {
 			// A link to a file inside the folder is listed (under its own name).
 			target, ok := r.inside(p)
 			if !ok {
@@ -544,7 +560,7 @@ func (r *Repository) FileAt(rel string) (File, bool) {
 	if err != nil {
 		return File{}, false
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	if isLink(info.Mode()) {
 		target, ok := r.inside(abs)
 		if !ok {
 			return File{}, false

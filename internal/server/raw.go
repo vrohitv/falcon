@@ -4,6 +4,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,6 @@ func (s *Server) raw(w http.ResponseWriter, r *http.Request, rp *workspace.Repo)
 		// The browser's own PDF viewer needs scripts in its sandboxed frame.
 		h.Set("Content-Security-Policy", "frame-ancestors 'self'")
 	}
-	h.Set("Content-Disposition", "inline; filename*=UTF-8''"+strings.ReplaceAll(filepath.Base(p), " ", "%20"))
+	h.Set("Content-Disposition", "inline; filename*=UTF-8''"+url.PathEscape(filepath.Base(p)))
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }

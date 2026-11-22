@@ -2,6 +2,7 @@ package packs
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -119,5 +120,28 @@ func TestMissingToolsAreReported(t *testing.T) {
 	}
 	if m := clangd.Missing(""); len(m) != 0 {
 		t.Fatalf("clangd needs nothing: %v", m)
+	}
+}
+
+// Remembered looks each command up once, failures included.
+func TestRememberedLooksEachCommandUpOnce(t *testing.T) {
+	calls := map[string]int{}
+	look := Remembered(func(c string) (string, error) {
+		calls[c]++
+		if c == "missing" {
+			return "", exec.ErrNotFound
+		}
+		return "/bin/" + c, nil
+	})
+	for range 3 {
+		if p, err := look("gopls"); p != "/bin/gopls" || err != nil {
+			t.Fatalf("gopls: %q %v", p, err)
+		}
+		if _, err := look("missing"); err == nil {
+			t.Fatal("a missing command was found")
+		}
+	}
+	if calls["gopls"] != 1 || calls["missing"] != 1 {
+		t.Fatalf("looked up %v", calls)
 	}
 }

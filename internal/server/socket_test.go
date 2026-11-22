@@ -145,8 +145,12 @@ func TestOneSocketCarriesGitFilesAndTerminals(t *testing.T) {
 	}
 	id := opened["session"].(map[string]any)["id"].(string)
 	ws.expect("term.attached", 3*time.Second)
-	ws.typeIn(id, "echo sum-$((20+22)); stty size\n")
-	out := ws.output(id, "30 100", 10*time.Second)
+	line, size, enter := "echo sum-$((20+22)); stty size", "30 100", "\n"
+	if runtime.GOOS == "windows" {
+		line, size, enter = `echo "sum-$(20+22)"; $z = $Host.UI.RawUI.WindowSize; echo "size-$($z.Height)x$($z.Width)"`, "size-30x100", "\r\n"
+	}
+	ws.typeIn(id, line+enter)
+	out := ws.output(id, size, 10*time.Second)
 	if !strings.Contains(out, "sum-42") {
 		t.Fatalf("terminal output: %q", out)
 	}
@@ -175,7 +179,7 @@ func TestOneSocketCarriesGitFilesAndTerminals(t *testing.T) {
 	other.send(map[string]any{"t": "term.attach", "id": id})
 	other.expect("term.gone", 3*time.Second)
 	// Exit is reported, and the session is gone.
-	again.typeIn(id, "exit 7\n")
+	again.typeIn(id, "exit 7"+enter)
 	if exit := again.expect("term.exit", 5*time.Second); exit["code"] != float64(7) {
 		t.Fatalf("exit: %v", exit)
 	}

@@ -2,7 +2,6 @@ package term
 
 import (
 	"bytes"
-	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -55,6 +54,11 @@ func shellLine(cmd string) string {
 	return cmd + "\n"
 }
 
+// onWindows is true where the terminal's shell is PowerShell (or cmd) on a pseudo-console, not a POSIX
+// shell on a pty: the commands typed differ, and the console redraws its screen rather than passing every
+// byte through.
+var onWindows = runtime.GOOS == "windows"
+
 func TestSessionRunsAShellAndComesBackAfterDetaching(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	t.Setenv("FALCON_TOKEN", "secret-token-value-123456789")
@@ -66,18 +70,23 @@ func TestSessionRunsAShellAndComesBackAfterDetaching(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := s.Attach()
-	s.Write([]byte(shellLine("echo falcon-$((40+2)); pwd; echo token=[$FALCON_TOKEN] term=$TERM")))
+	// Each answer is computed, so the terminal's echo of the command line does not contain it.
+	first, inFolder := "echo falcon-$((40+2)); pwd; echo token=[$FALCON_TOKEN] term=$TERM", strings.TrimPrefix(dir, "/private")
+	if onWindows {
+		// A long path wraps on an 80-column console, so the folder is compared by the shell itself.
+		first = "echo \"falcon-$(40+2)\"; echo (\"in-\" + ((Get-Location).Path -eq '" + dir + "')); echo \"token=[$env:FALCON_TOKEN] term=$env:TERM\""
+		inFolder = "in-True"
+	}
+	s.Write([]byte(shellLine(first)))
 	out := read(t, v, "term=xterm-256color", 10*time.Second)
 	if !strings.Contains(out, "falcon-42") {
 		t.Fatalf("the shell did not run the command: %q", out)
 	}
-	real, _ := os.Getwd()
-	_ = real
 	if !strings.Contains(out, "token=[]") {
 		t.Fatalf("Falcon's token must not reach the terminal: %q", out)
 	}
 	// The shell starts in the folder (macOS's temporary folders resolve through /private).
-	if !strings.Contains(out, strings.TrimPrefix(dir, "/private")) {
+	if !strings.Contains(out, inFolder) {
 		t.Fatalf("not started in the folder %s: %q", dir, out)
 	}
 	// A page leaves and comes back: the output so far is there again.
@@ -93,8 +102,13 @@ func TestSessionRunsAShellAndComesBackAfterDetaching(t *testing.T) {
 	if err := s.Resize(132, 40); err != nil {
 		t.Fatal(err)
 	}
-	s.Write([]byte(shellLine("stty size")))
-	read(t, v2, "40 132", 5*time.Second)
+	if onWindows {
+		s.Write([]byte(shellLine("$z = $Host.UI.RawUI.WindowSize; echo \"size-$($z.Height)x$($z.Width)\"")))
+		read(t, v2, "size-40x132", 5*time.Second)
+	} else {
+		s.Write([]byte(shellLine("stty size")))
+		read(t, v2, "40 132", 5*time.Second)
+	}
 	// Listing, then exit: the session goes away.
 	if l := m.List(dir); len(l) != 1 || l[0].ID != s.ID || l[0].Cols != 132 {
 		t.Fatalf("list: %+v", l)
@@ -129,7 +143,12 @@ func TestSlowViewerPausesTheShellAndLosesNothing(t *testing.T) {
 	}
 	v := s.Attach()
 	// About 9 MB of numbered lines, then a marker.
-	s.Write([]byte(shellLine("i=0; while [ $i -lt 300000 ]; do echo line-$i-xxxxxxxxxxxxxxxx; i=$((i+1)); done; echo END-OF-$((1+1))")))
+	loop := "i=0; while [ $i -lt 300000 ]; do echo line-$i-xxxxxxxxxxxxxxxx; i=$((i+1)); done; echo END-OF-$((1+1))"
+	if onWindows {
+		// Built first and printed as one write: PowerShell printing 300,000 items one by one takes minutes.
+		loop = "$a = foreach ($i in 0..299999) { \"line-$i-xxxxxxxxxxxxxxxx\" }; $a -join \"`n\"; echo \"END-OF-$(1+1)\""
+	}
+	s.Write([]byte(shellLine(loop)))
 	time.Sleep(1500 * time.Millisecond)
 	// Nothing was acknowledged: no more than the window (plus one read) is waiting for this viewer.
 	v.mu.Lock()
@@ -139,7 +158,13 @@ func TestSlowViewerPausesTheShellAndLosesNothing(t *testing.T) {
 		t.Fatalf("a slow viewer holds %d bytes; the shell should have paused", held)
 	}
 	// The marker is computed, so the terminal's echo of the command line does not contain it.
-	out := read(t, v, "END-OF-2", 60*time.Second)
+	out := read(t, v, "END-OF-2", 120*time.Second)
+	if onWindows {
+		// The pseudo-console is a screen, not a stream: while nobody reads, it keeps drawing into its own
+		// buffer and then sends only what is on screen, so lines that scrolled away meanwhile never come.
+		// What holds is that the shell waited for the viewer and finished.
+		return
+	}
 	for _, want := range []string{"line-0-", "line-150000-", "line-299999-"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %s", want)

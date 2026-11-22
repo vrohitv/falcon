@@ -30,10 +30,13 @@ type lspRun struct {
 	State string    `json:"state"`
 	Note  string    `json:"note"`
 	At    time.Time `json:"at"`
+	// seq orders runs: two noted within one tick of the clock (common on Windows) have the same At.
+	seq uint64
 }
 type lspRuns struct {
 	sync.Mutex
-	m map[string]lspRun
+	m   map[string]lspRun
+	seq uint64
 }
 
 func runKey(root, server string) string { return root + "\x00" + server }
@@ -44,7 +47,8 @@ func (l *lspRuns) note(root, server, state, note string) {
 	if l.m == nil {
 		l.m = map[string]lspRun{}
 	}
-	l.m[runKey(root, server)] = lspRun{State: state, Note: domain.Prefix(note, 300), At: time.Now().UTC()}
+	l.seq++
+	l.m[runKey(root, server)] = lspRun{State: state, Note: domain.Prefix(note, 300), At: time.Now().UTC(), seq: l.seq}
 }
 
 // latest is the most recent run of a server anywhere in a folder.
@@ -54,7 +58,7 @@ func (l *lspRuns) latest(folder, server string) lspRun {
 	var best lspRun
 	for k, r := range l.m {
 		root, cmd, _ := strings.Cut(k, "\x00")
-		if cmd == server && within(folder, root) && r.At.After(best.At) {
+		if cmd == server && within(folder, root) && r.seq > best.seq {
 			best = r
 		}
 	}
@@ -71,7 +75,7 @@ func within(folder, path string) bool {
 // folder are doing: starting, indexing (and on what), ready, or failed.
 func (s *Server) lspStatus(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	enabled := !s.NoLSP
-	look := packs.Look(rp.Repo.Path)
+	look := packs.Remembered(packs.Look(rp.Repo.Path))
 	type instance struct {
 		Root  string `json:"root"`
 		State string `json:"state"`
@@ -243,7 +247,7 @@ func characters(line string, utf16col int) int {
 
 func (s *Server) languages(w http.ResponseWriter, r *http.Request, rp *workspace.Repo) {
 	out := []map[string]any{}
-	look := packs.Look(rp.Repo.Path)
+	look := packs.Remembered(packs.Look(rp.Repo.Path))
 	for _, pack := range packs.Packs {
 		chosen, _, installed := pack.ResolveIn(rp.Repo.Path, look)
 		out = append(out, map[string]any{"pack": pack, "installed": installed, "server": chosen.Command, "navigates": chosen.Navigates})

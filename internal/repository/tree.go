@@ -49,7 +49,7 @@ func (r *Repository) Directory(ctx context.Context, path string) ([]DirectoryEnt
 		}
 		p := filepath.ToSlash(filepath.Join(path, child.Name()))
 		entry := DirectoryEntry{Path: p, Directory: child.IsDir(), Protected: Protected(p)}
-		if child.Type()&os.ModeSymlink != 0 {
+		if isLink(child.Type()) {
 			// A link inside the folder opens like what it points at; one leading out is shown but closed.
 			if target, ok := r.inside(filepath.Join(r.Path, p)); ok {
 				if info, err := os.Stat(target); err == nil {

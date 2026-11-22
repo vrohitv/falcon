@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -23,6 +25,17 @@ type winPTY struct {
 	in      *os.File // what is typed
 	out     *os.File // what the console prints
 	once    sync.Once
+	// The console keeps its end of the output pipe open after the shell exits, so the reader would wait
+	// forever: the shell's exit is watched instead, and closes the console (which ends the output).
+	exited  chan struct{}
+	code    uint32
+	closing sync.Once
+}
+
+// closeConsole closes the pseudo-console once: it sends what is left of the screen, ends whatever is
+// still attached, and closes the output pipe, so a pending Read returns.
+func (p *winPTY) closeConsole() {
+	p.closing.Do(func() { windows.ClosePseudoConsole(p.console) })
 }
 
 func start(argv []string, dir string, env []string, cols, rows int) (PTY, error) {
@@ -45,7 +58,7 @@ func start(argv []string, dir string, env []string, cols, rows int) (PTY, error)
 		windows.CloseHandle(outRead)
 		return nil, err
 	}
-	p := &winPTY{console: console, in: os.NewFile(uintptr(inWrite), "conpty-in"), out: os.NewFile(uintptr(outRead), "conpty-out")}
+	p := &winPTY{console: console, exited: make(chan struct{}), in: os.NewFile(uintptr(inWrite), "conpty-in"), out: os.NewFile(uintptr(outRead), "conpty-out")}
 	attrs, err := windows.NewProcThreadAttributeList(1)
 	if err != nil {
 		p.Kill()
@@ -60,6 +73,9 @@ func start(argv []string, dir string, env []string, cols, rows int) (PTY, error)
 	}
 	si := windows.StartupInfoEx{ProcThreadAttributeList: attrs.List()}
 	si.Cb = uint32(unsafe.Sizeof(si))
+	// Without this a child inherits Falcon's own standard handles whenever they are redirected (output to a
+	// file or pipe, run from a service or a test) and prints there instead of on the pseudo-console.
+	si.Flags |= windows.STARTF_USESTDHANDLES
 	// The program is found as a terminal would find it (PATH, PATHEXT).
 	if path, err := exec.LookPath(argv[0]); err == nil {
 		argv = append([]string{path}, argv[1:]...)
@@ -84,6 +100,14 @@ func start(argv []string, dir string, env []string, cols, rows int) (PTY, error)
 	}
 	windows.CloseHandle(pi.Thread)
 	p.process, p.pid = pi.Process, pi.ProcessId
+	go func() {
+		_, _ = windows.WaitForSingleObject(p.process, windows.INFINITE)
+		if windows.GetExitCodeProcess(p.process, &p.code) != nil {
+			p.code = 1
+		}
+		close(p.exited)
+		p.closeConsole()
+	}()
 	return p, nil
 }
 
@@ -102,30 +126,31 @@ func (p *winPTY) Wait() (int, error) {
 	if p.process == 0 {
 		return -1, errors.New("not started")
 	}
-	if _, err := windows.WaitForSingleObject(p.process, windows.INFINITE); err != nil {
-		return -1, err
-	}
-	var code uint32
-	if err := windows.GetExitCodeProcess(p.process, &code); err != nil {
-		return -1, err
-	}
-	return int(code), nil
+	<-p.exited
+	return int(p.code), nil
 }
 func (p *winPTY) Kill() {
 	p.once.Do(func() {
 		if p.pid != 0 {
 			// The shell and everything it started.
-			_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(int(p.pid))).Run()
+			kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(int(p.pid)))
+			kill.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 /* CREATE_NO_WINDOW */}
+			_ = kill.Run()
 		}
 		if p.process != 0 {
 			_ = windows.TerminateProcess(p.process, 1)
 		}
 		// Closing the console ends what is still attached and unblocks the reader.
-		windows.ClosePseudoConsole(p.console)
+		p.closeConsole()
 		_ = p.in.Close()
 		_ = p.out.Close()
 		if p.process != 0 {
-			windows.CloseHandle(p.process)
+			// The handle is the exit watcher's until the shell has gone.
+			select {
+			case <-p.exited:
+				windows.CloseHandle(p.process)
+			case <-time.After(5 * time.Second):
+			}
 		}
 	})
 }

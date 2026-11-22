@@ -6,14 +6,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
+// symlink makes a link (target in this system's separators), or skips the test where links need a
+// privilege the user does not have (Windows without Developer Mode).
+func symlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(filepath.FromSlash(target), link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("cannot make symbolic links here (enable Developer Mode): %v", err)
+		}
+		t.Fatal(err)
+	}
+}
+
 func fixture(t *testing.T) *Repository {
 	t.Helper()
 	root := t.TempDir()
-	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.test"}} {
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.test"},
+		// Git for Windows turns line-ending conversion on for the whole system; tests write exact bytes.
+		{"config", "core.autocrlf", "false"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
 		if b, err := cmd.CombinedOutput(); err != nil {
@@ -38,10 +53,12 @@ func fixture(t *testing.T) *Repository {
 }
 func TestConfinedReadsAndOptimisticWrites(t *testing.T) {
 	r := fixture(t)
-	if err := os.Symlink(t.TempDir(), filepath.Join(r.Path, "escape")); err != nil {
-		t.Fatal(err)
+	refused := []string{"../outside", "/etc/passwd", ".git/config", ".env", "a.py/../../outside"}
+	// Where links cannot be made (Windows without Developer Mode) the rest is still checked.
+	if os.Symlink(t.TempDir(), filepath.Join(r.Path, "escape")) == nil {
+		refused = append(refused, "escape/secret")
 	}
-	for _, path := range []string{"../outside", "/etc/passwd", ".git/config", ".env", "escape/secret", "a.py/../../outside"} {
+	for _, path := range refused {
 		if _, err := r.Read(path); err == nil {
 			t.Fatalf("accepted %s", path)
 		}
@@ -138,10 +155,10 @@ func TestSymlinksInsideAreFollowedOutsideRefused(t *testing.T) {
 	os.WriteFile(outside, []byte("secret\n"), 0o644)
 	os.MkdirAll(filepath.Join(r.Path, "docs"), 0o755)
 	os.WriteFile(filepath.Join(r.Path, "docs", "AGENTS.md"), []byte("# agents\n"), 0o644)
-	os.Symlink("docs/AGENTS.md", filepath.Join(r.Path, "CLAUDE.md"))
-	os.Symlink("docs", filepath.Join(r.Path, "manual"))
-	os.Symlink(outside, filepath.Join(r.Path, "leak.txt"))
-	os.Symlink(".git/config", filepath.Join(r.Path, "cfg"))
+	symlink(t, "docs/AGENTS.md", filepath.Join(r.Path, "CLAUDE.md"))
+	symlink(t, "docs", filepath.Join(r.Path, "manual"))
+	symlink(t, outside, filepath.Join(r.Path, "leak.txt"))
+	symlink(t, ".git/config", filepath.Join(r.Path, "cfg"))
 	if f, err := r.Read("CLAUDE.md"); err != nil || f.Content != "# agents\n" {
 		t.Fatalf("inside link: %v %q", err, f.Content)
 	}

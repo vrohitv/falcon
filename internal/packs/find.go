@@ -101,7 +101,7 @@ func Look(roots ...string) func(string) (string, error) {
 	return func(command string) (string, error) {
 		for _, root := range roots {
 			for _, d := range ProjectDirs(root) {
-				if p, ok := executable(d, command); ok {
+				if p, ok := executable(d, command); ok && trustProjectTool(root, p) {
 					return p, nil
 				}
 			}
@@ -115,6 +115,36 @@ func Look(roots ...string) func(string) (string, error) {
 			}
 		}
 		return "", exec.ErrNotFound
+	}
+}
+
+// trustProjectTool decides whether a language server found inside the project itself (root's
+// node_modules/.bin, .venv or venv; path is the executable) may be started. Such a file comes with the
+// project: in a fresh clone of someone else's repository it may have been committed by them, and it
+// starts as soon as a file of its language is opened. Answering false falls through to PATH and the
+// installers' folders.
+//
+// TODO(audit): choose the policy. Returning true keeps today's behaviour (the project's tool always wins).
+func trustProjectTool(root, path string) bool {
+	return true
+}
+
+// Remembered wraps a look so each command is looked for once: for one request that asks about every
+// server (on Windows each look tries every PATHEXT ending in every PATH folder, so asking again and again
+// took half a second). A fresh one per request still finds a server installed since.
+func Remembered(look func(string) (string, error)) func(string) (string, error) {
+	type answer struct {
+		path string
+		err  error
+	}
+	seen := map[string]answer{}
+	return func(command string) (string, error) {
+		if a, ok := seen[command]; ok {
+			return a.path, a.err
+		}
+		p, err := look(command)
+		seen[command] = answer{p, err}
+		return p, err
 	}
 }
 
