@@ -350,10 +350,12 @@ func mergeSorted(a, b []int32) []int32 {
 
 // BuildText indexes the folder's text in the background (once at a time).
 func (x *Index) BuildText() {
+	x.Watch()
+	live := x.Live()
 	t := &x.text
 	t.mu.Lock()
-	// Built, nothing pending and checked a moment ago: nothing to do.
-	if t.building || (t.built && len(t.pending) == 0 && time.Since(t.statAt) < 10*time.Second) {
+	// Built, nothing pending and current (watched, or checked a moment ago): nothing to do.
+	if t.building || (t.built && len(t.pending) == 0 && (live || time.Since(t.statAt) < 10*time.Second)) {
 		t.mu.Unlock()
 		return
 	}
@@ -365,6 +367,19 @@ func (x *Index) BuildText() {
 			t.building = false
 			t.mu.Unlock()
 		}()
+		x.wmu.Lock()
+		defer x.wmu.Unlock()
+		// Watched and built: the changed files are already read; fold them in.
+		t.mu.Lock()
+		if x.Live() && t.built {
+			if len(t.pending) > 0 {
+				t.rebuildLocked()
+			}
+			t.mu.Unlock()
+			x.saveText()
+			return
+		}
+		t.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		// First the copy saved last time: only what changed since is read again.
@@ -496,6 +511,7 @@ func (x *Index) TextReady() bool {
 // the index cannot answer (not built yet, too short a query, too large a folder): then search everything.
 // The listing and file times are checked first, so a file changed a moment ago is never missed.
 func (x *Index) Candidates(ctx context.Context, q string) ([]string, bool) {
+	x.Watch()
 	t := &x.text
 	t.mu.Lock()
 	ready := t.built && !t.disabled
@@ -506,20 +522,22 @@ func (x *Index) Candidates(ctx context.Context, q string) ([]string, bool) {
 		}
 		return nil, false
 	}
-	// Checked before every answer: a file another tool wrote a moment ago is never missed. The check is
-	// the listing plus one stat per file; only files that changed are read.
-	x.mu.Lock()
-	x.dirty = true
-	x.mu.Unlock()
-	files, err := x.Fresh(ctx)
-	if err != nil {
-		return nil, false
+	// Watched: the index already holds every change; the answer comes from memory. Not watched: the
+	// listing and each file's time are checked first, so a file another tool wrote is never missed.
+	if !x.Live() {
+		x.mu.Lock()
+		x.dirty = true
+		x.mu.Unlock()
+		files, err := x.Fresh(ctx)
+		if err != nil {
+			return nil, false
+		}
+		paths := make([]string, len(files))
+		for i, f := range files {
+			paths[i] = f.Path
+		}
+		x.syncText(ctx, paths, false)
 	}
-	paths := make([]string, len(files))
-	for i, f := range files {
-		paths[i] = f.Path
-	}
-	x.syncText(ctx, paths, false)
 	// Many changes: rebuild the inverted index in the background.
 	t.mu.Lock()
 	many := len(t.pending) > 256

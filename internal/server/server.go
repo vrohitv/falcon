@@ -77,6 +77,15 @@ func (s *Server) index(rp *workspace.Repo) *index.Index {
 	return x
 }
 
+// touchIndex marks a folder's index as in use, if it exists.
+func (s *Server) touchIndex(rp *workspace.Repo) {
+	s.idxMu.Lock()
+	if _, ok := s.indexes[rp.ID]; ok {
+		s.indexUsed[rp.ID] = time.Now()
+	}
+	s.idxMu.Unlock()
+}
+
 func (s *Server) indexFile(id string) string {
 	if s.Data == "" {
 		return ""
@@ -93,6 +102,9 @@ func (s *Server) sweepIndexes() {
 		s.idxMu.Lock()
 		for id, at := range s.indexUsed {
 			if time.Since(at) > IndexIdle {
+				if x := s.indexes[id]; x != nil {
+					x.Close() // its watcher stops too
+				}
 				delete(s.indexes, id)
 				delete(s.indexUsed, id)
 				delete(s.searches, id)
@@ -374,4 +386,9 @@ func Run(ctx context.Context, address string, handler http.Handler) error {
 func (s *Server) Close() {
 	s.lsps.Close()
 	s.terms.Close()
+	s.idxMu.Lock()
+	for _, x := range s.indexes {
+		x.Close()
+	}
+	s.idxMu.Unlock()
 }

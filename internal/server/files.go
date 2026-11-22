@@ -165,7 +165,7 @@ func (s *Server) saveFile(w http.ResponseWriter, r *http.Request, rp *workspace.
 		fail(w, err)
 		return
 	}
-	s.index(rp).Invalidate()
+	s.index(rp).Changed(input.Path) // in the index before the answer, not when the watcher reports it
 	respond(w, f)
 }
 

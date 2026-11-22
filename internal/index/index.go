@@ -2,10 +2,14 @@
 // explorer filter, go to file and fuzzy matching) and every declared name (for go to definition and go to
 // symbol). Both answer from memory; both stay current without being rebuilt.
 //
-//   - Files: the listing is served from memory and refreshed in the background when it is more than a
-//     moment old or something changed (stale-while-revalidate), so a request never waits for git.
-//   - Symbols: every code file's declarations, keyed by name. A refresh stats the files and parses only
-//     those whose size or time changed. The index is saved to disk, so a restart starts warm.
+//   - Files: the listing, served from memory.
+//   - Symbols: every code file's declarations, keyed by name, saved to disk so a restart starts warm.
+//   - Text: which files contain which trigrams, so a search reads only the files that can match.
+//
+// The folder's watcher (live.go) keeps all three current: when the system reports a change, only the
+// files concerned are read again, and the listing only when files appeared or went. Requests never
+// list or stat the folder. Where the tree cannot be watched, the listing is refreshed when it is a
+// moment old and a search checks file times first.
 package index
 
 import (
@@ -94,12 +98,19 @@ type Index struct {
 
 	text textIndex
 
+	lv  live
+	wmu sync.Mutex          // held by whatever changes the index (see live.go)
+	set map[string]struct{} // the listing, as a set (under mu)
+
 	// closed: the folder was removed; nothing more is saved.
 	closed atomic.Bool
 }
 
 // Close stops the index saving anything (its folder is no longer served).
-func (x *Index) Close() { x.closed.Store(true) }
+func (x *Index) Close() {
+	x.closed.Store(true)
+	x.stopLive()
+}
 
 // New makes an index for a repository; save is where the symbol index is kept between runs ("" for none).
 func New(repo *repository.Repository, save string) *Index {
@@ -109,9 +120,13 @@ func New(repo *repository.Repository, save string) *Index {
 }
 
 // Invalidate marks the listing and symbols as possibly out of date (a save, a git change, an event).
+// With the watcher running, only the generation moves: the watcher reports what changed on disk.
 func (x *Index) Invalidate() {
+	live := x.Live()
 	x.mu.Lock()
-	x.dirty = true
+	if !live {
+		x.dirty = true
+	}
 	x.gen++
 	x.mu.Unlock()
 }
@@ -126,13 +141,15 @@ func (x *Index) Gen() uint64 {
 // Files is the folder's file listing. The first call waits for git; later calls return at once and refresh
 // in the background when the listing is old or marked out of date.
 func (x *Index) Files(ctx context.Context) ([]repository.File, error) {
+	x.Watch()
+	live := x.Live()
 	x.mu.Lock()
 	if x.files == nil {
 		x.mu.Unlock()
 		return x.list(ctx)
 	}
 	files := x.files
-	if (x.dirty || time.Since(x.listed) > FileTTL) && !x.listing {
+	if (x.dirty || (!live && time.Since(x.listed) > FileTTL)) && !x.listing {
 		x.listing = true
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -170,7 +187,11 @@ func (x *Index) list(ctx context.Context) ([]repository.File, error) {
 	for i, f := range files {
 		paths[i] = f.Path
 	}
-	x.files, x.entries, x.listed = files, ide.Entries(paths), time.Now()
+	set := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		set[p] = struct{}{}
+	}
+	x.files, x.entries, x.listed, x.set = files, ide.Entries(paths), time.Now(), set
 	return files, nil
 }
 
@@ -199,10 +220,19 @@ const maxIndexed = 1 << 20
 // Refresh brings the symbol index up to date: new and changed files are parsed, removed ones dropped.
 // Only one refresh runs at a time; the others return at once.
 func (x *Index) Refresh(ctx context.Context) {
+	x.Watch()
+	x.wmu.Lock()
+	defer x.wmu.Unlock()
+	x.refreshLocked(ctx, nil)
+}
+
+// refreshLocked refreshes every file (only == nil), or just the files named (a change the watcher
+// reported). The caller holds wmu.
+func (x *Index) refreshLocked(ctx context.Context, only []string) {
 	x.smu.Lock()
-	if x.building {
+	if x.building || (only != nil && x.built.IsZero() && len(x.names) == 0) {
 		x.smu.Unlock()
-		return
+		return // a first build reads everything anyway
 	}
 	x.building = true
 	old := x.perFile
@@ -212,11 +242,39 @@ func (x *Index) Refresh(ctx context.Context) {
 		x.building = false
 		x.smu.Unlock()
 	}()
-	files, err := x.Fresh(ctx)
-	if err != nil {
-		return
+	var files []repository.File
+	var next map[string]fileSyms
+	removedSome := false
+	if only == nil {
+		var err error
+		if files, err = x.Fresh(ctx); err != nil {
+			return
+		}
+		next = make(map[string]fileSyms, len(files))
+	} else {
+		x.mu.Lock()
+		set := x.set
+		x.mu.Unlock()
+		next = make(map[string]fileSyms, len(old))
+		for p, fs := range old {
+			next[p] = fs
+		}
+		for _, p := range only {
+			if _, listed := set[p]; listed {
+				if info, err := os.Lstat(filepath.Join(x.repo.Path, p)); err == nil && info.Mode().IsRegular() {
+					files = append(files, repository.File{Path: p, Size: info.Size()})
+					continue
+				}
+			}
+			if _, had := next[p]; had {
+				delete(next, p)
+				removedSome = true
+			}
+		}
+		for _, f := range files {
+			delete(next, f.Path) // decided again below
+		}
 	}
-	next := make(map[string]fileSyms, len(files))
 	changed := 0
 	type job struct {
 		path      string
@@ -271,11 +329,13 @@ func (x *Index) Refresh(ctx context.Context) {
 	}
 	close(jobs)
 	wg.Wait()
-	removed := false
+	removed := removedSome
 	for p := range old {
+		if removed {
+			break
+		}
 		if _, ok := next[p]; !ok {
 			removed = true
-			break
 		}
 	}
 	if changed == 0 && !removed && !x.built.IsZero() {
@@ -310,6 +370,9 @@ func (x *Index) Ready() bool {
 
 // Warm starts a refresh in the background when the index is older than ttl.
 func (x *Index) Warm(ttl time.Duration) {
+	if x.Live() && x.Ready() {
+		return // the watcher keeps it current
+	}
 	x.smu.RLock()
 	stale := time.Since(x.built) > ttl && !x.building
 	x.smu.RUnlock()

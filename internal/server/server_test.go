@@ -209,11 +209,18 @@ func TestSearchFindsTextWithOptions(t *testing.T) {
 	if len(hits) != 1 {
 		t.Fatalf("folder glob: %+v", hits)
 	}
-	// New files are searched too.
+	// New files are searched too, as soon as the folder's watcher has reported them.
 	os.WriteFile(filepath.Join(h.a.Path, "fresh.txt"), []byte("Greet from a new file\n"), 0o644)
-	h.json("GET", base+"Greet", "", &hits)
-	if len(hits) != 3 {
-		t.Fatalf("untracked: %+v", hits)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.json("GET", base+"Greet", "", &hits)
+		if len(hits) == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("untracked: %+v", hits)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	var e struct{ Error string }
 	if code := h.json("GET", base+"(&regex=true", "", &e); code != 400 || e.Error == "" {

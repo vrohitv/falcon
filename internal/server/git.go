@@ -368,9 +368,6 @@ func (s *Server) watchGit(rp *workspace.Repo) (*gitWatch, chan int, error) {
 	return gw, ch, nil
 }
 
-// watchTree notices working-tree edits made outside Falcon (an editor, a terminal, a build) while someone
-// is watching: every 1.5 s it compares git status and the size and time of each changed file. It costs
-// one git status per tick and stops when nobody is subscribed.
 // treePrint is the working tree as git status sees it, with each changed file's size and time.
 func treePrint(rp *workspace.Repo) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -391,34 +388,72 @@ func treePrint(rp *workspace.Repo) string {
 	return b.String()
 }
 
+// watchTree notices working-tree edits made outside Falcon (an editor, a terminal, a build) while someone
+// is watching, and tells them. The folder's watcher says when something changed; only then is git
+// status run (at most once per pause), so an idle folder costs nothing. Without a watcher (the system
+// cannot watch the tree) it is checked every pause instead. It stops when nobody is subscribed.
 func (s *Server) watchTree(rp *workspace.Repo, gw *gitWatch) {
-	// The pause adapts: at least 1.5 s, and four times as long as the last status took, so a large
+	// The pause adapts: at least 1.5 s apart, and four times as long as the last status took, so a large
 	// repository (or a slow disk, or Windows with an antivirus) never spends more than a fifth of its
-	// time being watched.
+	// time on this.
 	pause := func(took time.Duration) time.Duration { return max(1500*time.Millisecond, 4*took) }
+	x := s.index(rp)
+	x.Watch()
+	changes, unsubscribe := x.Changes()
+	defer func() { unsubscribe() }()
+	tick := time.NewTicker(1500 * time.Millisecond)
+	defer tick.Stop()
+	var later <-chan time.Time
+	due := false
 	// The baseline was taken by watchGit, before the watch was handed out.
-	wait := pause(0)
+	next := time.Now().Add(pause(0))
 	for {
-		time.Sleep(wait)
-		// Under the workspace lock, so a subscriber arriving now gets a fresh watch instead of this one.
-		s.git.mu.Lock()
-		gw.mu.Lock()
-		idle := len(gw.subs) == 0
-		gw.mu.Unlock()
-		if idle && s.git.watch[rp.ID] == gw {
-			delete(s.git.watch, rp.ID)
+		select {
+		case _, ok := <-changes:
+			if !ok {
+				changes = nil // the index closed: check every pause from now on
+				continue
+			}
+			due = true
+		case <-tick.C:
+			// Under the workspace lock, so a subscriber arriving now gets a fresh watch instead of this one.
+			s.git.mu.Lock()
+			gw.mu.Lock()
+			idle := len(gw.subs) == 0
+			gw.mu.Unlock()
+			if idle && s.git.watch[rp.ID] == gw {
+				delete(s.git.watch, rp.ID)
+			}
+			s.git.mu.Unlock()
+			if idle {
+				gw.w.Close()
+				return
+			}
+			if changes != nil {
+				s.touchIndex(rp) // someone is looking: the folder's index (and its watcher) stays
+			}
+			if changes == nil || !x.Live() {
+				due = true
+			}
+		case <-later:
+			later = nil
 		}
-		s.git.mu.Unlock()
-		if idle {
-			gw.w.Close()
-			return
+		if !due {
+			continue
 		}
+		if wait := time.Until(next); wait > 0 {
+			if later == nil {
+				later = time.After(wait)
+			}
+			continue
+		}
+		due = false
 		gw.mu.Lock()
 		gen := gw.gen
 		gw.mu.Unlock()
 		started := time.Now()
 		fp := treePrint(rp)
-		wait = pause(time.Since(started))
+		next = time.Now().Add(pause(time.Since(started)))
 		if fp == "" {
 			continue
 		}

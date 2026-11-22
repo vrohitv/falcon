@@ -60,6 +60,44 @@ func superset(t *testing.T, got, want []string, q string) {
 // The candidates always include every file that matches, through random edits, new files, deletions and
 // immediate queries; and they are far fewer than all files.
 func TestTextCandidatesNeverMissAMatch(t *testing.T) {
+	t.Run("watched", func(t *testing.T) { candidatesNeverMiss(t, true) })
+	t.Run("checked", func(t *testing.T) {
+		noWatch = true
+		defer func() { noWatch = false }()
+		candidatesNeverMiss(t, false)
+	})
+}
+
+// eventually retries check until it passes (the watcher takes a moment to report a change).
+func eventually(t *testing.T, check func() error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := check()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func missing(got, want []string) error {
+	have := map[string]bool{}
+	for _, g := range got {
+		have[g] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			return fmt.Errorf("%s matches but was not a candidate (candidates %v)", w, got)
+		}
+	}
+	return nil
+}
+
+func candidatesNeverMiss(t *testing.T, watched bool) {
 	rng := rand.New(rand.NewSource(7))
 	words := []string{"alpha", "Beta", "gamma", "handleRequest", "parseToken", "cache", "Server", "render", "index", "Ünïcode"}
 	line := func() string {
@@ -83,6 +121,14 @@ func TestTextCandidatesNeverMissAMatch(t *testing.T) {
 	r := repo(t, files)
 	x := New(r, "")
 	waitText(t, x)
+	if watched {
+		eventually(t, func() error {
+			if !x.Live() {
+				return fmt.Errorf("not watching")
+			}
+			return nil
+		})
+	}
 	ctx := context.Background()
 	list := func() []string {
 		fs, _ := x.Fresh(ctx)
@@ -112,12 +158,23 @@ func TestTextCandidatesNeverMissAMatch(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(r.Path, fmt.Sprintf("new%d.txt", round)), []byte("brandnewword"+fmt.Sprint(round)+"\n"), 0o644)
 		os.Remove(filepath.Join(r.Path, fmt.Sprintf("d1/f%d.txt", 1+7*round)))
+		// Checked: right away. Watched: as soon as the watcher has reported the changes.
 		for _, q := range []string{"handlerequest99", fmt.Sprintf("fresh%d", round), fmt.Sprintf("brandnewword%d", round)} {
-			got, ok := x.Candidates(ctx, q)
-			if !ok {
-				t.Fatalf("index unavailable for %q", q)
+			check := func() error {
+				got, ok := x.Candidates(ctx, q)
+				if !ok {
+					return fmt.Errorf("index unavailable for %q", q)
+				}
+				if err := missing(got, matches(t, r.Path, list(), q)); err != nil {
+					return fmt.Errorf("query %q: %v", q, err)
+				}
+				return nil
 			}
-			superset(t, got, matches(t, r.Path, list(), q), q)
+			if watched {
+				eventually(t, check)
+			} else if err := check(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	// Narrow: a specific token is in few files.
