@@ -93,6 +93,20 @@
     }
     if (!next.length) onhide();
   }
+  /** A new shell in place of one whose session is gone: same tab, same place among its panes. */
+  async function replace(id: string) {
+    try {
+      const s = await openTerminal(100, 30);
+      const old = tabs.flatMap((t) => t.panes).find((p) => p.id === id);
+      const fresh = { id: s.id, title: old?.title ?? titled(s.title) };
+      tabs = tabs.map((t) => ({ ...t, panes: t.panes.map((p) => (p.id === id ? fresh : p)) }));
+      delete refs[id];
+      if (activePane === id) activePane = s.id;
+    } catch (e) {
+      remove(id);
+      onerror((e as Error).message);
+    }
+  }
   export function focus() {
     refs[activePane]?.focus();
   }
@@ -228,6 +242,9 @@
               onfocus={() => (activePane = p.id)}
               onlink={onopenfile}
               onexit={(code) => {
+                // Gone (null) is not an exit: the session ended without its shell saying so (Falcon was
+                // restarted). A fresh shell takes its place rather than the panel closing under the user.
+                if (code === null) return void replace(p.id);
                 if (code) onerror(`${p.title} exited with code ${code}`);
                 remove(p.id);
               }}

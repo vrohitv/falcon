@@ -92,8 +92,13 @@
   const LH = 22,
     OVERSCAN = 24,
     MAX_CHUNKS = 8;
+  // pending: each window being fetched, with what cancels it (a fast scroll or a jump passes windows it
+  // no longer needs, and their requests must not hold up the one it stops on).
   const chunks = new Map<number, string[]>(),
-    pending = new Set<number>();
+    pending = new Map<number, AbortController>();
+  // The windows the screen (with its margin) needs now: what loads keep, and what the cache keeps longest.
+  let wantFrom = 0,
+    wantTo = 0;
   let generation = 0,
     raf = 0,
     controller = new AbortController(),
@@ -640,7 +645,15 @@
     const top = Math.floor(viewport.scrollTop / LH);
     const from = Math.max(0, top - OVERSCAN),
       to = Math.min(meta.total, top + shown + OVERSCAN);
-    for (let w = Math.floor(from / CHUNK); w * CHUNK < Math.max(to, from + 1); w++) void load(w);
+    wantFrom = Math.floor(from / CHUNK);
+    wantTo = Math.floor((Math.max(to, from + 1) - 1) / CHUNK);
+    // Windows passed on the way here are no longer needed: stop fetching them.
+    for (const [w, c] of pending)
+      if (w < wantFrom || w > wantTo) {
+        c.abort();
+        pending.delete(w);
+      }
+    for (let w = wantFrom; w <= wantTo; w++) void load(w);
     for (const line of rowCache.keys()) if (line <= from || line > to) rowCache.delete(line);
     const list: HTMLElement[] = [];
     for (let line = from + 1; line <= to; line++) {
@@ -687,16 +700,25 @@
         return;
       }
     }
-    pending.add(chunk);
+    const mine = new AbortController();
+    pending.set(chunk, mine);
     const gen = generation;
     try {
-      const data = await codeWindow(path, chunk * CHUNK, meta?.hash || "", controller.signal, force);
+      const data = await codeWindow(path, chunk * CHUNK, meta?.hash || "", AbortSignal.any([controller.signal, mine.signal]), force);
       if (destroyed || gen !== generation) return;
       if (!meta) meta = data;
-      chunks.delete(chunk);
       chunks.set(chunk, data.lines);
-      while (chunks.size > MAX_CHUNKS)
-        chunks.delete(chunks.keys().next().value!);
+      // Over the limit, the window farthest from what is on screen goes (never one in view, however late
+      // the others arrived).
+      while (chunks.size > MAX_CHUNKS) {
+        let far = chunk,
+          distance = -1;
+        for (const w of chunks.keys()) {
+          const d = w < wantFrom ? wantFrom - w : w > wantTo ? w - wantTo : 0;
+          if (d > distance) [far, distance] = [w, d];
+        }
+        chunks.delete(far);
+      }
       error = "";
       schedule();
       if (data.refine && !force)
@@ -704,15 +726,16 @@
           if (!destroyed && gen === generation) void load(chunk, true);
         }, 1200);
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || mine.signal.aborted) return;
       if (String((err as Error).message).includes("source changed")) {
-        if (gen === generation) pending.delete(chunk);
+        if (pending.get(chunk) === mine) pending.delete(chunk);
         void refresh();
         return;
       }
       error = String((err as Error).message);
     } finally {
-      if (gen === generation) pending.delete(chunk);
+      // Only this request's own entry: the window may be wanted (and fetched) again meanwhile.
+      if (pending.get(chunk) === mine) pending.delete(chunk);
     }
   }
   let first = true;
@@ -723,6 +746,7 @@
     controller.abort();
     controller = new AbortController();
     chunks.clear();
+    for (const c of pending.values()) c.abort();
     pending.clear();
     rowCache.clear();
     meta = null;
